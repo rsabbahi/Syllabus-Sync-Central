@@ -207,17 +207,17 @@ export async function registerRoutes(
       
       let text = "";
       try {
-        // pdf-parse exports the function directly, but let's be safe
-        const parseFunc = typeof pdfParse === 'function' ? pdfParse : pdfParse.default;
-        if (typeof parseFunc === 'function') {
-          const data = await parseFunc(req.file.buffer);
-          text = data.text;
-        } else {
-          throw new Error("pdf-parse export is not a function");
+        console.log("Attempting PDF parse with buffer length:", req.file.buffer.length);
+        const data = await pdfParse(req.file.buffer);
+        text = data.text;
+        console.log("PDF parse successful, extracted text length:", text.length);
+        if (!text || text.trim().length < 10) {
+          throw new Error("Extracted text too short, likely failed");
         }
       } catch (err) {
         console.error("PDF parse error, trying fallback:", err);
         text = req.file.buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
+        console.log("Fallback text length:", text.length);
       }
 
       const prompt = `Extract the course schedule and all assignments from this syllabus text.
@@ -238,7 +238,8 @@ CRITICAL INSTRUCTIONS:
 7. If the text says "Weekly [X] on [Day]", create recurring entries for that day every week of the semester (January 12 to May 10, 2026).
 8. DO NOT skip any rows in a schedule table. Every row with a date is a separate entry.
 9. If you see a date range like "Jan 12-16", use the start date (Jan 12).
-10. Ensure the response is VALID JSON.
+10. If the text is messy or binary, try to find ANY dates and associated labels.
+11. Ensure the response is VALID JSON.
 
 Text:
 ${text.substring(0, 30000)}

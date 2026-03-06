@@ -200,6 +200,7 @@ function SyllabusTab({ courseId, syllabi }: { courseId: number, syllabi: any[] }
             onClick={handleUpload} 
             disabled={!file} 
             isLoading={upload.isPending}
+            data-testid="button-extract-ai"
           >
             Extract AI
           </Button>
@@ -212,7 +213,7 @@ function SyllabusTab({ courseId, syllabi }: { courseId: number, syllabi: any[] }
             <h4 className="text-green-800 font-bold text-lg">Success! Syllabus Parsed.</h4>
             <p className="text-green-700">The AI has successfully created assignments and study tasks from your syllabus.</p>
           </div>
-          <Button variant="primary" onClick={() => window.location.reload()}>
+          <Button variant="primary" onClick={() => window.location.reload()} data-testid="button-view-assignments">
             View Assignments
           </Button>
         </div>
