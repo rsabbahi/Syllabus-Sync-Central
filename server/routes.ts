@@ -220,26 +220,28 @@ export async function registerRoutes(
         text = req.file.buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
       }
 
-      const prompt = `Extract the course schedule and any recurring assignments from this syllabus text.
+      const prompt = `Extract the course schedule and all assignments from this syllabus text.
 Return ONLY a JSON object with this exact structure:
 {
   "assignments": [
-    { "name": "Week 1: Topic Review", "type": "reading", "dueDate": "YYYY-MM-DDTHH:mm:ssZ", "weight": 0, "maxScore": 100 }
-  ],
-  "questions": [
-    "When is the weekly homework usually due?",
-    "When are the midterms or quizzes held?"
+    { "name": "Topic: [Name]", "type": "reading", "dueDate": "YYYY-MM-DDTHH:mm:ssZ", "weight": 0, "maxScore": 100 }
   ]
 }
 
-GUIDELINES:
-1. If there is a weekly schedule at the end, create an assignment for each week's main topic or review task.
-2. For dates, if it says "Week 1" and the term is "Spring 2026", assume Week 1 starts Jan 12, 2026. Increment by 7 days for each subsequent week.
-3. If the syllabus mentions "Weekly Homework" or "Quizzes" but doesn't specify the exact day/time, add a string to the "questions" array to ask the user for clarification.
-4. If a specific date like "March 10th" is mentioned, use that date with the year 2026.
+CRITICAL INSTRUCTIONS:
+1. Scan the entire text specifically for any section labeled "Schedule", "Course Outline", "Calendar", or "Weekly Topics".
+2. Look for patterns like "Date | Topic", "Week | Date | Assignment".
+3. For EVERY single date mentioned in the schedule (e.g., "Jan 15", "2/20", "March 10th"), you MUST create an assignment entry.
+4. If a date is associated with a lecture topic, name it "Topic: [Topic Name]".
+5. If a date is associated with a Quiz, Exam, Homework, or Project, use that name (e.g., "Quiz 1", "Homework 2").
+6. Use the year 2026 for all dates.
+7. If the text says "Weekly [X] on [Day]", create recurring entries for that day every week of the semester (January 12 to May 10, 2026).
+8. DO NOT skip any rows in a schedule table. Every row with a date is a separate entry.
+9. If you see a date range like "Jan 12-16", use the start date (Jan 12).
+10. Ensure the response is VALID JSON.
 
 Text:
-${text.substring(0, 10000)}
+${text.substring(0, 30000)}
 `;
 
       let parsedContent = null;
@@ -274,10 +276,6 @@ ${text.substring(0, 10000)}
       await storage.addSyllabus(courseId, userId, "local-upload", text, parsedContent);
 
       let message = "Syllabus processed and assignments added.";
-      if (parsedContent?.questions && parsedContent.questions.length > 0) {
-        message = `Syllabus processed! Note: AI needs more info: ${parsedContent.questions.join(" ")}`;
-      }
-
       res.json({ success: true, message });
     } catch (err) {
       console.error(err);
