@@ -211,6 +211,10 @@ export async function registerRoutes(
         const data = await pdfParse(req.file.buffer);
         text = data.text;
         console.log("PDF parse successful, extracted text length:", text.length);
+        
+        // Sanitize text: remove non-printable characters and excessive whitespace
+        text = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ");
+        
         if (!text || text.trim().length < 10) {
           throw new Error("Extracted text too short, likely failed");
         }
@@ -220,30 +224,36 @@ export async function registerRoutes(
         console.log("Fallback text length:", text.length);
       }
 
-      const prompt = `Extract the course schedule and all assignments from this syllabus text.
-Return ONLY a JSON object with this exact structure:
+      const prompt = `You are a highly advanced syllabus parser. Your goal is to extract every single assignment, quiz, exam, and lecture topic from the following text.
+
+TEXT TO ANALYZE:
+---
+${text.substring(0, 50000)}
+---
+
+JSON OUTPUT FORMAT:
 {
   "assignments": [
-    { "name": "Topic: [Name]", "type": "reading", "dueDate": "YYYY-MM-DDTHH:mm:ssZ", "weight": 0, "maxScore": 100 }
+    { 
+      "name": "Assignment/Lecture Title", 
+      "type": "exam|hw|reading|paper|lecture", 
+      "dueDate": "YYYY-MM-DDTHH:mm:ssZ", 
+      "weight": 0, 
+      "maxScore": 100 
+    }
   ]
 }
 
-CRITICAL INSTRUCTIONS:
-1. Scan the entire text specifically for any section labeled "Schedule", "Course Outline", "Calendar", or "Weekly Topics".
-2. Look for patterns like "Date | Topic", "Week | Date | Assignment".
-3. For EVERY single date mentioned in the schedule (e.g., "Jan 15", "2/20", "March 10th"), you MUST create an assignment entry.
-4. If a date is associated with a lecture topic, name it "Topic: [Topic Name]".
-5. If a date is associated with a Quiz, Exam, Homework, or Project, use that name (e.g., "Quiz 1", "Homework 2").
-6. Use the year 2026 for all dates.
-7. If the text says "Weekly [X] on [Day]", create recurring entries for that day every week of the semester (January 12 to May 10, 2026).
-8. DO NOT skip any rows in a schedule table. Every row with a date is a separate entry.
-9. If you see a date range like "Jan 12-16", use the start date (Jan 12).
-10. If the text is messy or binary, try to find ANY dates and associated labels.
-11. Ensure the response is VALID JSON.
+STRICT EXTRACTION RULES:
+1. **NO SKIPPING**: Scan every line. If a line has a date and a topic/assignment, EXTRACT IT.
+2. **DATE SEARCH**: Look for patterns like "Jan 12", "1/15", "Feb 2nd", "Week 1", "M/W/F".
+3. **MESSY TEXT**: The text might be garbled due to PDF extraction. Use context clues to identify dates and titles.
+4. **LECTURES**: If a date lists a topic (e.g., "Intro to Calculus"), create an entry named "Lecture: Intro to Calculus" with type "lecture".
+5. **RECURRING**: If it says "Quizzes every Monday", generate a quiz for every Monday from Jan 12 to May 10, 2026.
+6. **YEAR**: Assume the year is 2026 for all dates.
+7. **JSON ONLY**: Return only valid JSON. Do not include any commentary.
 
-Text:
-${text.substring(0, 30000)}
-`;
+Failure to extract items when they are present in the text is a critical error. Focus on the 'Schedule' or 'Calendar' sections first.`;
 
       let parsedContent = null;
       try {
@@ -256,6 +266,12 @@ ${text.substring(0, 30000)}
         console.log("AI Parsed Content:", JSON.stringify(parsedContent, null, 2));
         
         if (parsedContent?.assignments && Array.isArray(parsedContent.assignments)) {
+          // Clear existing assignments for this course to avoid duplicates on re-upload
+          const existingAssignments = await storage.getAssignmentsByCourse(courseId);
+          for (const ea of existingAssignments) {
+            await storage.deleteAssignment(ea.id);
+          }
+
           for (const a of parsedContent.assignments) {
             // Validate required fields
             if (!a.name || !a.dueDate) continue;
@@ -264,7 +280,7 @@ ${text.substring(0, 30000)}
               name: String(a.name),
               type: String(a.type || "assignment"),
               dueDate: new Date(a.dueDate),
-              weight: Number(a.weight || 10),
+              weight: Number(a.weight || 0),
               maxScore: Number(a.maxScore || 100)
             });
             await storage.generateTasksForAssignment(userId, newAssignment);
