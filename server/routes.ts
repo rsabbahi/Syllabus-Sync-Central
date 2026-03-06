@@ -220,15 +220,23 @@ export async function registerRoutes(
         text = req.file.buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
       }
 
-      const prompt = `Extract all assignments, exams, homeworks, and readings from this syllabus text. 
+      const prompt = `Extract the course schedule and any recurring assignments from this syllabus text.
 Return ONLY a JSON object with this exact structure:
 {
   "assignments": [
-    { "name": "Midterm Exam", "type": "exam", "dueDate": "YYYY-MM-DDTHH:mm:ssZ", "weight": 20, "maxScore": 100 }
+    { "name": "Week 1: Topic Review", "type": "reading", "dueDate": "YYYY-MM-DDTHH:mm:ssZ", "weight": 0, "maxScore": 100 }
+  ],
+  "questions": [
+    "When is the weekly homework usually due?",
+    "When are the midterms or quizzes held?"
   ]
 }
 
-CRITICAL: You MUST find actual dates mentioned in the text. If you find a date like "October 15th", use the current year (2026). If no date is found, DO NOT hallucinate a random date, instead skip that assignment. Estimate weight/maxScore if they are mentioned, or use 10 and 100 as defaults.
+GUIDELINES:
+1. If there is a weekly schedule at the end, create an assignment for each week's main topic or review task.
+2. For dates, if it says "Week 1" and the term is "Spring 2026", assume Week 1 starts Jan 12, 2026. Increment by 7 days for each subsequent week.
+3. If the syllabus mentions "Weekly Homework" or "Quizzes" but doesn't specify the exact day/time, add a string to the "questions" array to ask the user for clarification.
+4. If a specific date like "March 10th" is mentioned, use that date with the year 2026.
 
 Text:
 ${text.substring(0, 10000)}
@@ -265,7 +273,12 @@ ${text.substring(0, 10000)}
       
       await storage.addSyllabus(courseId, userId, "local-upload", text, parsedContent);
 
-      res.json({ success: true, message: "Syllabus processed and assignments added." });
+      let message = "Syllabus processed and assignments added.";
+      if (parsedContent?.questions && parsedContent.questions.length > 0) {
+        message = `Syllabus processed! Note: AI needs more info: ${parsedContent.questions.join(" ")}`;
+      }
+
+      res.json({ success: true, message });
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to process syllabus" });
