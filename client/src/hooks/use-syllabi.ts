@@ -1,8 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
+import { useToast } from "@/hooks/use-toast";
 
 export function useUploadSyllabus(courseId: number) {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   
   return useMutation({
     mutationFn: async (file: File) => {
@@ -22,9 +24,20 @@ export function useUploadSyllabus(courseId: number) {
       }
       return await res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: [api.courses.get.path, courseId] });
       queryClient.invalidateQueries({ queryKey: [api.assignments.list.path, courseId] });
+      toast({
+        title: "Syllabus Parsed!",
+        description: data.message || "Assignments and tasks have been created.",
+      });
     },
+    onError: (error: Error) => {
+      toast({
+        title: "Upload Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
   });
 }

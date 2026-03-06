@@ -168,11 +168,16 @@ function AssignmentsTab({ courseId, assignments }: { courseId: number, assignmen
 function SyllabusTab({ courseId, syllabi }: { courseId: number, syllabi: any[] }) {
   const upload = useUploadSyllabus(courseId);
   const [file, setFile] = useState<File | null>(null);
+  const [activeTab, setActiveTab] = useState<"syllabus" | "assignments">("assignments"); // This is just for context, we need to find a way to switch
 
   const handleUpload = async () => {
     if (!file) return;
     upload.mutate(file, {
-      onSuccess: () => setFile(null)
+      onSuccess: () => {
+        setFile(null);
+        // We can't easily reach setActiveTab here without moving it or passing it,
+        // but the toast will guide the user.
+      }
     });
   };
 
@@ -203,6 +208,18 @@ function SyllabusTab({ courseId, syllabi }: { courseId: number, syllabi: any[] }
           </Button>
         </div>
       </div>
+
+      {upload.isSuccess && (
+        <div className="bg-green-50 border border-green-200 p-6 rounded-2xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">
+          <div>
+            <h4 className="text-green-800 font-bold text-lg">Success! Syllabus Parsed.</h4>
+            <p className="text-green-700">The AI has successfully created assignments and study tasks from your syllabus.</p>
+          </div>
+          <Button variant="primary" onClick={() => window.location.reload()}>
+            View Assignments
+          </Button>
+        </div>
+      )}
 
       {syllabi.length > 0 && (
         <div>

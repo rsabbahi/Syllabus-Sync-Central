@@ -228,7 +228,8 @@ Return ONLY a JSON object with this exact structure:
   ]
 }
 
-If you don't know the exact time, set it to 23:59:59Z of that day. Estimate weight/maxScore if they are somewhat mentioned or default them to 10 and 100.
+CRITICAL: You MUST find actual dates mentioned in the text. If you find a date like "October 15th", use the current year (2026). If no date is found, DO NOT hallucinate a random date, instead skip that assignment. Estimate weight/maxScore if they are mentioned, or use 10 and 100 as defaults.
+
 Text:
 ${text.substring(0, 10000)}
 `;
