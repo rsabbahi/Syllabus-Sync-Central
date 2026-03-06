@@ -205,8 +205,20 @@ export async function registerRoutes(
         return res.status(400).json({ message: "No file uploaded" });
       }
       
-      const pdfData = await pdfParse(req.file.buffer);
-      const text = pdfData.text;
+      let text = "";
+      try {
+        // pdf-parse exports the function directly, but let's be safe
+        const parseFunc = typeof pdfParse === 'function' ? pdfParse : pdfParse.default;
+        if (typeof parseFunc === 'function') {
+          const data = await parseFunc(req.file.buffer);
+          text = data.text;
+        } else {
+          throw new Error("pdf-parse export is not a function");
+        }
+      } catch (err) {
+        console.error("PDF parse error, trying fallback:", err);
+        text = req.file.buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
+      }
 
       const prompt = `Extract all assignments, exams, homeworks, and readings from this syllabus text. 
 Return ONLY a JSON object with this exact structure:
