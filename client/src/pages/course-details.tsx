@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRoute } from "wouter";
 import { useCourse } from "@/hooks/use-courses";
 import { useAssignments, useCreateAssignment, useDeleteAssignment } from "@/hooks/use-assignments";
@@ -49,17 +49,24 @@ export default function CourseDetails() {
       </div>
 
       <div className="pt-4">
-        {activeTab === "assignments" && <AssignmentsTab courseId={courseId} assignments={assignments || []} />}
-        {activeTab === "syllabus" && <SyllabusTab courseId={courseId} syllabi={course.syllabi || []} />}
+        {activeTab === "assignments" && <AssignmentsTab courseId={courseId} assignments={assignments || []} forceAdd={isAdding} />}
+        {activeTab === "syllabus" && <SyllabusTab courseId={courseId} syllabi={course.syllabi || []} onManualAdd={() => {
+          setIsAdding(true);
+          setActiveTab("assignments");
+        }} />}
       </div>
     </div>
   );
 }
 
-function AssignmentsTab({ courseId, assignments }: { courseId: number, assignments: any[] }) {
+function AssignmentsTab({ courseId, assignments, forceAdd }: { courseId: number, assignments: any[], forceAdd?: boolean }) {
   const createAssignment = useCreateAssignment(courseId);
   const deleteAssignment = useDeleteAssignment(courseId);
-  const [isAdding, setIsAdding] = useState(false);
+  const [isAdding, setIsAdding] = useState(forceAdd || false);
+  
+  useEffect(() => {
+    if (forceAdd) setIsAdding(true);
+  }, [forceAdd]);
   
   const [formData, setFormData] = useState({
     name: "",
@@ -165,15 +172,18 @@ function AssignmentsTab({ courseId, assignments }: { courseId: number, assignmen
   );
 }
 
-function SyllabusTab({ courseId, syllabi }: { courseId: number, syllabi: any[] }) {
+function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syllabi: any[], onManualAdd: () => void }) {
   const upload = useUploadSyllabus(courseId);
   const [file, setFile] = useState<File | null>(null);
+  const [isAdding, setIsAdding] = useState(false); // Add this state
 
   const handleUpload = async () => {
     if (!file) return;
     upload.mutate(file, {
       onSuccess: () => {
         setFile(null);
+        // Automatically switch to assignments tab to show results
+        window.location.reload();
       }
     });
   };
@@ -206,6 +216,19 @@ function SyllabusTab({ courseId, syllabi }: { courseId: number, syllabi: any[] }
           </Button>
         </div>
       </div>
+
+      {upload.isError && (
+        <div className="bg-destructive/10 border border-destructive/20 p-6 rounded-2xl mb-6 animate-in fade-in">
+          <div className="flex items-center gap-3 mb-2">
+            <AlertCircle className="w-5 h-5 text-destructive" />
+            <h4 className="text-destructive font-bold text-lg">Parsing Failed</h4>
+          </div>
+          <p className="text-destructive/80 mb-4">{(upload.error as any)?.response?.data?.message || "We couldn't extract assignments from this document. It might be a scan or have a complex layout."}</p>
+          <Button variant="outline" onClick={() => setIsAdding(true)}>
+            Add Manually
+          </Button>
+        </div>
+      )}
 
       {upload.isSuccess && (
         <div className="bg-green-50 border border-green-200 p-6 rounded-2xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">

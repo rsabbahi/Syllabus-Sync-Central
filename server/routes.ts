@@ -13,6 +13,10 @@ const pdfParse = require("pdf-parse");
 import OpenAI from "openai";
 import { registerAuthRoutes } from "./replit_integrations/auth";
 
+import { exec } from "child_process";
+import { promisify } from "util";
+const execAsync = promisify(exec);
+
 const upload = multer({ storage: multer.memoryStorage() });
 
 const openai = new OpenAI({
@@ -209,21 +213,32 @@ export async function registerRoutes(
       
       let text = "";
       try {
-        console.log("Attempting PDF parse with buffer length:", req.file.buffer.length);
-        const data = await pdfParse(req.file.buffer);
-        text = data.text;
-        console.log("PDF parse successful, extracted text length:", text.length);
+        console.log("Attempting PDF parse with pdftotext...");
+        // pdftotext -layout preserves columns and tables better
+        const { stdout } = await execAsync(`pdftotext -layout - -`, {
+          input: req.file.buffer,
+          encoding: "utf-8"
+        } as any);
         
-        // Sanitize text: remove non-printable characters but KEEP basic structure
-        text = text.replace(/[^\x20-\x7E\n\r\t]/g, " ");
-        
-        if (!text || text.trim().length < 10) {
-          throw new Error("Extracted text too short, likely failed");
+        text = stdout;
+        console.log("pdftotext successful, extracted length:", text.length);
+
+        if (!text || text.trim().length < 50) {
+          console.log("pdftotext failed or returned little text, trying pdf-parse...");
+          const data = await pdfParse(req.file.buffer);
+          text = data.text;
         }
+        
+        if (!text || text.trim().length < 50) {
+          throw new Error("Could not extract meaningful text from PDF");
+        }
+        
+        text = text.replace(/\s+/g, " ").substring(0, 50000);
       } catch (err) {
-        console.error("PDF parse error, trying fallback:", err);
-        text = req.file.buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t]/g, " ");
-        console.log("Fallback text length:", text.length);
+        console.error("PDF extraction failed:", err);
+        return res.status(422).json({ 
+          message: "We couldn't read the text in this PDF. It might be a scanned image or encrypted. Please try a different version or add assignments manually." 
+        });
       }
 
       const prompt = `You are a highly advanced syllabus parser. Your goal is to extract every single assignment, quiz, exam, and lecture topic from the following text.
@@ -267,17 +282,20 @@ Failure to extract items when they are present in the text is a critical error. 
         parsedContent = JSON.parse(aiRes.choices[0].message?.content || "{}");
         console.log("AI Parsed Content:", JSON.stringify(parsedContent, null, 2));
         
-        if (parsedContent?.assignments && Array.isArray(parsedContent.assignments)) {
+        // Handle both "assignments" and "items" keys for robustness
+        const extractedAssignments = parsedContent.assignments || parsedContent.items || [];
+
+        if (Array.isArray(extractedAssignments)) {
           // Clear existing assignments for this course to avoid duplicates on re-upload
-          // ONLY delete assignments that were created by this course
           await storage.clearCourseAssignments(courseId);
 
-          for (const a of parsedContent.assignments) {
-            // Validate required fields
-            if (!a.name || !a.dueDate) continue;
+          for (const a of extractedAssignments) {
+            // Validate required fields - be more lenient with names
+            const name = a.name || a.title || a.description || "Unnamed Assignment";
+            if (!a.dueDate) continue;
 
             const newAssignment = await storage.createAssignment(courseId, {
-              name: String(a.name),
+              name: String(name),
               type: String(a.type || "assignment"),
               dueDate: new Date(a.dueDate),
               weight: Number(a.weight || 0),
