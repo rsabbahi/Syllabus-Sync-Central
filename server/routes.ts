@@ -241,15 +241,19 @@ ${text.substring(0, 10000)}
           response_format: { type: "json_object" }
         });
         parsedContent = JSON.parse(aiRes.choices[0].message?.content || "{}");
+        console.log("AI Parsed Content:", JSON.stringify(parsedContent, null, 2));
         
-        if (parsedContent?.assignments) {
+        if (parsedContent?.assignments && Array.isArray(parsedContent.assignments)) {
           for (const a of parsedContent.assignments) {
+            // Validate required fields
+            if (!a.name || !a.dueDate) continue;
+
             const newAssignment = await storage.createAssignment(courseId, {
-              name: a.name,
-              type: a.type,
+              name: String(a.name),
+              type: String(a.type || "assignment"),
               dueDate: new Date(a.dueDate),
-              weight: Number(a.weight),
-              maxScore: Number(a.maxScore)
+              weight: Number(a.weight || 10),
+              maxScore: Number(a.maxScore || 100)
             });
             await storage.generateTasksForAssignment(userId, newAssignment);
           }
