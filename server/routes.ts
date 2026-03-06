@@ -3,6 +3,8 @@ import type { Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
+import { eq, inArray } from "drizzle-orm";
+import { assignments, tasks, userGrades } from "@shared/schema";
 import { isAuthenticated, setupAuth } from "./replit_integrations/auth";
 import multer from "multer";
 import { createRequire } from "module";
@@ -212,8 +214,8 @@ export async function registerRoutes(
         text = data.text;
         console.log("PDF parse successful, extracted text length:", text.length);
         
-        // Sanitize text: remove non-printable characters and excessive whitespace
-        text = text.replace(/[^\x20-\x7E\n\r\t]/g, " ").replace(/\s+/g, " ");
+        // Sanitize text: remove non-printable characters but KEEP basic structure
+        text = text.replace(/[^\x20-\x7E\n\r\t]/g, " ");
         
         if (!text || text.trim().length < 10) {
           throw new Error("Extracted text too short, likely failed");
@@ -267,10 +269,8 @@ Failure to extract items when they are present in the text is a critical error. 
         
         if (parsedContent?.assignments && Array.isArray(parsedContent.assignments)) {
           // Clear existing assignments for this course to avoid duplicates on re-upload
-          const existingAssignments = await storage.getAssignmentsByCourse(courseId);
-          for (const ea of existingAssignments) {
-            await storage.deleteAssignment(ea.id);
-          }
+          // ONLY delete assignments that were created by this course
+          await storage.clearCourseAssignments(courseId);
 
           for (const a of parsedContent.assignments) {
             // Validate required fields

@@ -40,6 +40,7 @@ export interface IStorage {
 
   // Assignments
   getAssignmentsByCourse(courseId: number): Promise<Assignment[]>;
+  clearCourseAssignments(courseId: number): Promise<void>;
   createAssignment(courseId: number, assignment: Omit<InsertAssignment, "courseId">): Promise<Assignment>;
   updateAssignment(id: number, updates: UpdateAssignment): Promise<Assignment>;
   deleteAssignment(id: number): Promise<void>;
@@ -120,6 +121,17 @@ export class DatabaseStorage implements IStorage {
 
   async getAssignmentsByCourse(courseId: number): Promise<Assignment[]> {
     return await db.select().from(assignments).where(eq(assignments.courseId, courseId)).orderBy(assignments.dueDate);
+  }
+
+  async clearCourseAssignments(courseId: number): Promise<void> {
+    const courseAssignments = await this.getAssignmentsByCourse(courseId);
+    const assignmentIds = courseAssignments.map(a => a.id);
+    
+    if (assignmentIds.length > 0) {
+      await db.delete(tasks).where(inArray(tasks.assignmentId, assignmentIds));
+      await db.delete(userGrades).where(inArray(userGrades.assignmentId, assignmentIds));
+      await db.delete(assignments).where(eq(assignments.courseId, courseId));
+    }
   }
 
   async createAssignment(courseId: number, assignment: Omit<InsertAssignment, "courseId">): Promise<Assignment> {
