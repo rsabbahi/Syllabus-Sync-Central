@@ -17,6 +17,7 @@ export default function CourseDetails() {
   const { data: assignments, isLoading: assignmentsLoading } = useAssignments(courseId);
   
   const [activeTab, setActiveTab] = useState<"syllabus" | "assignments">("assignments");
+  const [isAdding, setIsAdding] = useState(false);
 
   if (courseLoading || assignmentsLoading) return <LoadingSpinner />;
   if (!course) return <div className="p-8 text-center text-xl font-bold">Course not found.</div>;
@@ -175,7 +176,6 @@ function AssignmentsTab({ courseId, assignments, forceAdd }: { courseId: number,
 function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syllabi: any[], onManualAdd: () => void }) {
   const upload = useUploadSyllabus(courseId);
   const [file, setFile] = useState<File | null>(null);
-  const [isAdding, setIsAdding] = useState(false); // Add this state
 
   const handleUpload = async () => {
     if (!file) return;
@@ -224,7 +224,7 @@ function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syl
             <h4 className="text-destructive font-bold text-lg">Parsing Failed</h4>
           </div>
           <p className="text-destructive/80 mb-4">{(upload.error as any)?.response?.data?.message || "We couldn't extract assignments from this document. It might be a scan or have a complex layout."}</p>
-          <Button variant="outline" onClick={() => setIsAdding(true)}>
+          <Button variant="outline" onClick={onManualAdd}>
             Add Manually
           </Button>
         </div>
