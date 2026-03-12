@@ -335,41 +335,99 @@ RULES (NON-NEGOTIABLE):
 
       let parsedContent = null;
       let createdCount = 0;
+      
       try {
-        const aiRes = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [{ role: "user", content: prompt }],
-          response_format: { type: "json_object" }
-        });
+        // Run GPT-4o and Mistral in parallel for multi-model extraction
+        const [gptRes, mistralRes] = await Promise.all([
+          // GPT-4o extraction
+          openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [{ role: "user", content: prompt }],
+            response_format: { type: "json_object" }
+          }),
+          // Mistral extraction with same prompt
+          fetch("https://api.mistral.ai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${process.env.Mistral_API_Key}`
+            },
+            body: JSON.stringify({
+              model: "mistral-large-latest",
+              messages: [
+                {
+                  role: "user",
+                  content: prompt
+                }
+              ],
+              response_format: { type: "json_object" }
+            })
+          }).then(res => res.json())
+        ]);
         
-        let rawContent = aiRes.choices[0].message?.content || "{}";
+        console.log("GPT-4o and Mistral extraction started in parallel");
         
-        // Attempt to clean up JSON if needed
+        // Parse both responses
+        let gptAssignments: any[] = [];
+        let mistralAssignments: any[] = [];
+        
         try {
-          parsedContent = JSON.parse(rawContent);
-        } catch (jsonErr) {
-          console.warn("JSON parse failed, attempting cleanup...", jsonErr);
-          // Try extracting JSON block from text
-          const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            parsedContent = JSON.parse(jsonMatch[0]);
-          } else {
-            throw jsonErr;
+          let gptRaw = gptRes.choices[0].message?.content || "{}";
+          try {
+            const gptParsed = JSON.parse(gptRaw);
+            gptAssignments = gptParsed.assignments || gptParsed.items || [];
+          } catch (e) {
+            const jsonMatch = gptRaw.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const gptParsed = JSON.parse(jsonMatch[0]);
+              gptAssignments = gptParsed.assignments || gptParsed.items || [];
+            }
           }
+          console.log("GPT-4o extracted:", gptAssignments.length, "items");
+        } catch (err) {
+          console.error("GPT-4o parsing error:", err);
         }
         
-        console.log("AI Parsed Content:", JSON.stringify(parsedContent, null, 2));
+        try {
+          let mistralRaw = mistralRes.choices?.[0]?.message?.content || "{}";
+          try {
+            const mistralParsed = JSON.parse(mistralRaw);
+            mistralAssignments = mistralParsed.assignments || mistralParsed.items || [];
+          } catch (e) {
+            const jsonMatch = mistralRaw.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const mistralParsed = JSON.parse(jsonMatch[0]);
+              mistralAssignments = mistralParsed.assignments || mistralParsed.items || [];
+            }
+          }
+          console.log("Mistral extracted:", mistralAssignments.length, "items");
+        } catch (err) {
+          console.error("Mistral parsing error:", err);
+        }
         
-        // Handle both "assignments" and "items" keys for robustness
-        let extractedAssignments = parsedContent.assignments || parsedContent.items || [];
+        // Merge and deduplicate both models' results
+        const mergedMap = new Map<string, any>();
         
-        // Validate and sanitize assignments
-        extractedAssignments = extractedAssignments.filter((a: any) => {
-          return a.name && a.dueDate && a.type;
-        });
-
+        const addAssignments = (assignments: any[]) => {
+          for (const a of assignments) {
+            if (a.name && a.dueDate && a.type) {
+              const key = `${a.name.trim()}|${a.dueDate}`;
+              if (!mergedMap.has(key)) {
+                mergedMap.set(key, a);
+              }
+            }
+          }
+        };
+        
+        addAssignments(gptAssignments);
+        addAssignments(mistralAssignments);
+        
+        let extractedAssignments = Array.from(mergedMap.values());
+        parsedContent = { assignments: extractedAssignments };
+        
+        console.log(`Merged extraction: ${gptAssignments.length} (GPT) + ${mistralAssignments.length} (Mistral) = ${extractedAssignments.length} unique items`);
+        
         if (Array.isArray(extractedAssignments) && extractedAssignments.length > 0) {
-          // Clear existing assignments for this course to avoid duplicates on re-upload
           await storage.clearCourseAssignments(courseId);
 
           for (const a of extractedAssignments) {
@@ -379,7 +437,6 @@ RULES (NON-NEGOTIABLE):
               const weight = Math.min(100, Math.max(0, Number(a.weight) || 0));
               const maxScore = Math.max(0, Number(a.maxScore) || 100);
               
-              // Validate date
               const dueDate = new Date(a.dueDate);
               if (isNaN(dueDate.getTime())) {
                 console.warn("Invalid date for:", name, a.dueDate);
@@ -401,9 +458,9 @@ RULES (NON-NEGOTIABLE):
           }
         }
         
-        console.log(`Successfully created ${createdCount} assignments from ${extractedAssignments.length} extracted items.`);
+        console.log(`Successfully created ${createdCount} assignments from dual-model extraction.`);
       } catch (err) {
-        console.error("AI parsing error:", err);
+        console.error("Multi-model extraction error:", err);
       }
       
       await storage.addSyllabus(courseId, userId, "local-upload", text, parsedContent);
