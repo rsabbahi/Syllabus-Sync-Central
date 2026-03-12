@@ -219,7 +219,8 @@ export async function registerRoutes(
         const base64Pdf = req.file.buffer.toString("base64");
         
         // Call Google Gemini API with vision capabilities
-        const geminiResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent", {
+        // Use Gemini Pro for intelligent document analysis with multiple passes
+        const geminiResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -235,7 +236,31 @@ export async function registerRoutes(
                   }
                 },
                 {
-                  text: "You are an expert document parser. Extract ALL text from this PDF with perfect preservation of structure. Handle:\n- Tables (convert to CSV-like format)\n- Multi-column layouts (merge columns)\n- Dense text blocks\n- Headers and section titles\n- Dates, deadlines, and schedule information\n- Grading weights and point values\nReturn clean, readable text with all information intact."
+                  text: `You are a world-class syllabus parser with expertise in educational documents. Your task is to extract EVERY piece of course information with perfect accuracy.
+
+EXTRACTION INSTRUCTIONS:
+1. Read the entire document page by page
+2. Identify all sections: Course Info, Schedule, Assignments, Grading, Policies
+3. For EVERY deadline, exam, quiz, assignment, or reading:
+   - Extract exact date (day, month, year)
+   - Extract assignment/activity name
+   - Extract point value or percentage weight
+   - Extract assignment type (homework, exam, quiz, paper, project, lab, reading, discussion, presentation)
+4. Handle complex layouts:
+   - Tables: Parse each row as separate item
+   - Multi-column text: Merge logically by proximity
+   - Scanned/image text: Use OCR interpretation
+5. Resolve ambiguities:
+   - Week numbers → convert to specific dates (assume 15-week semester starting Jan 13, 2026)
+   - "M/W/F" + time → extract as pattern
+   - Recurring items → list each occurrence
+6. Extract ALL grading information:
+   - Points per assignment
+   - Percentage weights
+   - Grade scale (A/B/C etc)
+   - Curves or adjustments
+
+Return a COMPLETE, VERBOSE reconstruction of the document's academic content.`
                 }
               ]
             }]
@@ -263,79 +288,129 @@ export async function registerRoutes(
         });
       }
 
-      const prompt = `You are a highly advanced syllabus parser. Your goal is to extract every single assignment, quiz, exam, and lecture topic from the following text.
+      const prompt = `You are the most intelligent and thorough syllabus parser in the world. Your ONLY job is to extract EVERY academic deadline, assignment, and event from the course material. Return ONLY valid JSON.
 
-TEXT TO ANALYZE:
+DOCUMENT TEXT:
 ---
 ${text.substring(0, 50000)}
 ---
 
-JSON OUTPUT FORMAT:
+JSON FORMAT (return ONLY this, no explanation):
 {
   "assignments": [
-    { 
-      "name": "Assignment/Lecture Title", 
-      "type": "exam|hw|reading|paper|lecture", 
-      "dueDate": "YYYY-MM-DDTHH:mm:ssZ", 
-      "weight": 0, 
-      "maxScore": 100 
+    {
+      "name": "Exact assignment name",
+      "type": "exam|hw|paper|project|quiz|lab|reading|discussion|presentation|lecture",
+      "dueDate": "YYYY-MM-DDTHH:mm:ssZ",
+      "weight": percentage_number_or_0,
+      "maxScore": points_or_100
     }
   ]
 }
 
-STRICT EXTRACTION RULES:
-1. **EXHAUSTIVE SEARCH**: Extract EVERY assignment, exam, quiz, paper, project, lab, reading, and lecture.
-2. **DATE PARSING**: Handle "Jan 12", "1/15", "Feb 2nd", "Week 1", "M/W/F", ranges like "Jan 10-12", percentages in parentheses, and inline dates.
-3. **TABLE DATA**: If assignments are in a table, extract each row as a separate item with exact dates.
-4. **COMPLEX LAYOUTS**: Parse multi-column sections, sidebars, and dense schedules by identifying date patterns and adjacent assignment names.
-5. **WEIGHT EXTRACTION**: Find grading percentages/weights in format like "30%", "30 points", "weight: 15" near assignment names.
-6. **RECURRING ITEMS**: If it says "Quizzes every Monday" or similar, generate entries for every occurrence from course start to end (assume Jan-May 2026).
-7. **LECTURE EXTRACTION**: Any dated topic (e.g., "Jan 12: Introduction to Calculus") becomes "Lecture: Introduction to Calculus".
-8. **MISSING DATA**: For any assignment without a due date, mark as "2026-05-15T23:59:59Z" (end of term).
-9. **YEAR**: All dates are 2026 unless explicitly stated.
-10. **JSON ONLY**: Return valid JSON. No commentary.
-11. **AMBIGUITY HANDLING**: When unsure about a date, use nearby context or assume next Monday if day-of-week only.
-12. **PRIORITY**: Focus on Schedule, Calendar, and Assignment sections first, then scan entire document for missed items.`;
+RULES (NON-NEGOTIABLE):
+1. **ZERO SKIPPING**: Extract EVERY single item. If there's a date + assignment name, extract it.
+2. **AGGRESSIVE SEARCH**: Look in: schedules, calendars, assignment lists, tables, course outline, syllabus, week-by-week breakdowns, exam dates, project timelines, reading lists with dates, discussion boards, labs, quizzes, participation events.
+3. **DATE INTELLIGENCE**:
+   - Parse "Jan 12" → "2026-01-12T23:59:59Z"
+   - Parse "1/15" → "2026-01-15T23:59:59Z"
+   - Parse "Week 3" with Jan 13 start → calculate actual date
+   - Parse "M/W/F" + time → extract as 3 separate weekly items
+   - Parse "by Friday" in context → use nearest Friday
+   - Parse ranges "Jan 10-15" → use end date (Jan 15)
+4. **WEIGHT EXTRACTION**: Find "30%", "30 points", "worth 50 points", "counts as 20%" near each item. If not found, use 0.
+5. **RECURRING PATTERN**: "Quiz every Monday Jan 13-Apr 25" → generate entry for EVERY Monday in that range.
+6. **TABLE PARSING**: Each table row = separate item. Extract all columns (name, date, points, type).
+7. **MULTI-COLUMN TEXT**: Read columns left-to-right, group by date, extract contiguous date+name pairs.
+8. **INTELLIGENT NAMING**: 
+   - "Chapter 5 reading due Feb 3" → name: "Chapter 5 Reading"
+   - "Jan 15: Intro to Calculus (lecture)" → name: "Lecture: Intro to Calculus"
+   - "Midterm Exam Wed March 5, 10-11:30am" → name: "Midterm Exam"
+9. **TYPE INFERENCE**: Exam/Midterm/Final→exam, HW/Assignment→hw, Paper/Essay→paper, Project→project, Quiz→quiz, Lab→lab, Reading→reading, Discussion→discussion, Presentation→presentation, Lecture/Class→lecture.
+10. **MISSING DATES**: If assignment has no date, use "2026-05-15T23:59:59Z".
+11. **MISSING WEIGHTS**: Use 0 if not specified.
+12. **AMBIGUITY**: When unsure, default to most recent reasonable date in 2026 (Jan-May).
+13. **NO DUPLICATION**: Remove exact duplicates by name+date.
+14. **RETURN ONLY JSON**: No text before/after JSON block.`;
 
       let parsedContent = null;
+      let createdCount = 0;
       try {
         const aiRes = await openai.chat.completions.create({
           model: "gpt-4o",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" }
         });
-        parsedContent = JSON.parse(aiRes.choices[0].message?.content || "{}");
+        
+        let rawContent = aiRes.choices[0].message?.content || "{}";
+        
+        // Attempt to clean up JSON if needed
+        try {
+          parsedContent = JSON.parse(rawContent);
+        } catch (jsonErr) {
+          console.warn("JSON parse failed, attempting cleanup...", jsonErr);
+          // Try extracting JSON block from text
+          const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            parsedContent = JSON.parse(jsonMatch[0]);
+          } else {
+            throw jsonErr;
+          }
+        }
+        
         console.log("AI Parsed Content:", JSON.stringify(parsedContent, null, 2));
         
         // Handle both "assignments" and "items" keys for robustness
-        const extractedAssignments = parsedContent.assignments || parsedContent.items || [];
+        let extractedAssignments = parsedContent.assignments || parsedContent.items || [];
+        
+        // Validate and sanitize assignments
+        extractedAssignments = extractedAssignments.filter((a: any) => {
+          return a.name && a.dueDate && a.type;
+        });
 
-        if (Array.isArray(extractedAssignments)) {
+        if (Array.isArray(extractedAssignments) && extractedAssignments.length > 0) {
           // Clear existing assignments for this course to avoid duplicates on re-upload
           await storage.clearCourseAssignments(courseId);
 
           for (const a of extractedAssignments) {
-            // Validate required fields - be more lenient with names
-            const name = a.name || a.title || a.description || "Unnamed Assignment";
-            if (!a.dueDate) continue;
+            try {
+              const name = String(a.name).trim();
+              const type = String(a.type).toLowerCase().trim();
+              const weight = Math.min(100, Math.max(0, Number(a.weight) || 0));
+              const maxScore = Math.max(0, Number(a.maxScore) || 100);
+              
+              // Validate date
+              const dueDate = new Date(a.dueDate);
+              if (isNaN(dueDate.getTime())) {
+                console.warn("Invalid date for:", name, a.dueDate);
+                continue;
+              }
 
-            const newAssignment = await storage.createAssignment(courseId, {
-              name: String(name),
-              type: String(a.type || "assignment"),
-              dueDate: new Date(a.dueDate),
-              weight: Number(a.weight || 0),
-              maxScore: Number(a.maxScore || 100)
-            });
-            await storage.generateTasksForAssignment(userId, newAssignment);
+              const newAssignment = await storage.createAssignment(courseId, {
+                name,
+                type,
+                dueDate,
+                weight,
+                maxScore
+              });
+              await storage.generateTasksForAssignment(userId, newAssignment);
+              createdCount++;
+            } catch (itemErr) {
+              console.error("Error creating assignment:", a.name, itemErr);
+            }
           }
         }
+        
+        console.log(`Successfully created ${createdCount} assignments from ${extractedAssignments.length} extracted items.`);
       } catch (err) {
         console.error("AI parsing error:", err);
       }
       
       await storage.addSyllabus(courseId, userId, "local-upload", text, parsedContent);
 
-      let message = "Syllabus processed and assignments added.";
+      let message = createdCount > 0 
+        ? `Successfully extracted ${createdCount} assignments from your syllabus!`
+        : "Syllabus processed. No assignments could be extracted — try adding them manually.";
       res.json({ success: true, message });
     } catch (err) {
       console.error(err);
