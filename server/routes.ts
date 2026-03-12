@@ -235,7 +235,7 @@ export async function registerRoutes(
                   }
                 },
                 {
-                  text: "Extract all text from this PDF document. Include all course information, assignments, deadlines, and grading details."
+                  text: "You are an expert document parser. Extract ALL text from this PDF with perfect preservation of structure. Handle:\n- Tables (convert to CSV-like format)\n- Multi-column layouts (merge columns)\n- Dense text blocks\n- Headers and section titles\n- Dates, deadlines, and schedule information\n- Grading weights and point values\nReturn clean, readable text with all information intact."
                 }
               ]
             }]
@@ -284,15 +284,18 @@ JSON OUTPUT FORMAT:
 }
 
 STRICT EXTRACTION RULES:
-1. **NO SKIPPING**: Scan every line. If a line has a date and a topic/assignment, EXTRACT IT.
-2. **DATE SEARCH**: Look for patterns like "Jan 12", "1/15", "Feb 2nd", "Week 1", "M/W/F".
-3. **MESSY TEXT**: The text might be garbled due to PDF extraction. Use context clues to identify dates and titles.
-4. **LECTURES**: If a date lists a topic (e.g., "Intro to Calculus"), create an entry named "Lecture: Intro to Calculus" with type "lecture".
-5. **RECURRING**: If it says "Quizzes every Monday", generate a quiz for every Monday from Jan 12 to May 10, 2026.
-6. **YEAR**: Assume the year is 2026 for all dates.
-7. **JSON ONLY**: Return only valid JSON. Do not include any commentary.
-
-Failure to extract items when they are present in the text is a critical error. Focus on the 'Schedule' or 'Calendar' sections first.`;
+1. **EXHAUSTIVE SEARCH**: Extract EVERY assignment, exam, quiz, paper, project, lab, reading, and lecture.
+2. **DATE PARSING**: Handle "Jan 12", "1/15", "Feb 2nd", "Week 1", "M/W/F", ranges like "Jan 10-12", percentages in parentheses, and inline dates.
+3. **TABLE DATA**: If assignments are in a table, extract each row as a separate item with exact dates.
+4. **COMPLEX LAYOUTS**: Parse multi-column sections, sidebars, and dense schedules by identifying date patterns and adjacent assignment names.
+5. **WEIGHT EXTRACTION**: Find grading percentages/weights in format like "30%", "30 points", "weight: 15" near assignment names.
+6. **RECURRING ITEMS**: If it says "Quizzes every Monday" or similar, generate entries for every occurrence from course start to end (assume Jan-May 2026).
+7. **LECTURE EXTRACTION**: Any dated topic (e.g., "Jan 12: Introduction to Calculus") becomes "Lecture: Introduction to Calculus".
+8. **MISSING DATA**: For any assignment without a due date, mark as "2026-05-15T23:59:59Z" (end of term).
+9. **YEAR**: All dates are 2026 unless explicitly stated.
+10. **JSON ONLY**: Return valid JSON. No commentary.
+11. **AMBIGUITY HANDLING**: When unsure about a date, use nearby context or assume next Monday if day-of-week only.
+12. **PRIORITY**: Focus on Schedule, Calendar, and Assignment sections first, then scan entire document for missed items.`;
 
       let parsedContent = null;
       try {
@@ -337,6 +340,17 @@ Failure to extract items when they are present in the text is a critical error. 
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to process syllabus" });
+    }
+  });
+
+  app.delete(api.syllabi.delete.path, async (req: any, res) => {
+    try {
+      const id = Number(req.params.id);
+      await storage.deleteSyllabus(id);
+      res.status(204).send();
+    } catch (err) {
+      console.error("Delete syllabus error:", err);
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 

@@ -41,3 +41,36 @@ export function useUploadSyllabus(courseId: number) {
     }
   });
 }
+
+export function useDeleteSyllabus(courseId: number) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async (syllabusId: number) => {
+      const url = buildUrl(api.syllabi.delete.path, { id: syllabusId });
+      const res = await fetch(url, {
+        method: api.syllabi.delete.method,
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to delete syllabus");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.courses.get.path, courseId] });
+      toast({
+        title: "Deleted",
+        description: "Syllabus removed.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to delete syllabus.",
+        variant: "destructive",
+      });
+    },
+  });
+}

@@ -2,12 +2,12 @@ import { useState, useEffect } from "react";
 import { useRoute } from "wouter";
 import { useCourse } from "@/hooks/use-courses";
 import { useAssignments, useCreateAssignment, useDeleteAssignment } from "@/hooks/use-assignments";
-import { useUploadSyllabus } from "@/hooks/use-syllabi";
+import { useUploadSyllabus, useDeleteSyllabus } from "@/hooks/use-syllabi";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
 import { LoadingSpinner } from "@/components/loading";
 import { format } from "date-fns";
-import { FileText, Plus, Trash2, Upload, AlertCircle } from "lucide-react";
+import { FileText, Plus, Trash2, Upload, AlertCircle, X } from "lucide-react";
 
 export default function CourseDetails() {
   const [, params] = useRoute("/courses/:id");
@@ -175,6 +175,7 @@ function AssignmentsTab({ courseId, assignments, forceAdd }: { courseId: number,
 
 function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syllabi: any[], onManualAdd: () => void }) {
   const upload = useUploadSyllabus(courseId);
+  const deleteSyllabus = useDeleteSyllabus(courseId);
   const [file, setFile] = useState<File | null>(null);
 
   const handleUpload = async () => {
@@ -254,10 +255,17 @@ function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syl
                   <p className="text-sm text-muted-foreground">Uploaded on {format(new Date(s.createdAt), "MMM d, yyyy")}</p>
                 </div>
                 {s.parsedContent && (
-                  <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                  <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mr-3">
                     AI Parsed
                   </span>
                 )}
+                <button
+                  onClick={() => deleteSyllabus.mutate(s.id)}
+                  disabled={deleteSyllabus.isPending}
+                  className="text-muted-foreground hover:text-destructive p-2 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
             ))}
           </div>

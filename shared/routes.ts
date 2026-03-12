@@ -144,6 +144,13 @@ export const api = {
       responses: {
         200: z.object({ success: z.boolean(), message: z.string() })
       }
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/syllabi/:id' as const,
+      responses: {
+        204: z.void()
+      }
     }
   }
 };

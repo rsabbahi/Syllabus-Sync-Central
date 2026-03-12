@@ -37,6 +37,7 @@ export interface IStorage {
 
   // Syllabus
   addSyllabus(courseId: number, userId: string, fileUrl: string, rawText: string, parsedContent: any): Promise<Syllabus>;
+  deleteSyllabus(id: number): Promise<void>;
 
   // Assignments
   getAssignmentsByCourse(courseId: number): Promise<Assignment[]>;
@@ -117,6 +118,10 @@ export class DatabaseStorage implements IStorage {
       parsedContent
     }).returning();
     return newSyllabus;
+  }
+
+  async deleteSyllabus(id: number): Promise<void> {
+    await db.delete(syllabi).where(eq(syllabi.id, id));
   }
 
   async getAssignmentsByCourse(courseId: number): Promise<Assignment[]> {
