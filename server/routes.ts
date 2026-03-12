@@ -213,27 +213,49 @@ export async function registerRoutes(
       
       let text = "";
       try {
-        console.log("Attempting PDF parse with pdftotext...");
-        // pdftotext -layout preserves columns and tables better
-        const { stdout } = await execAsync(`pdftotext -layout - -`, {
-          input: req.file.buffer,
-          encoding: "utf-8"
-        } as any);
+        console.log("Using Google Gemini API to extract PDF content...");
         
-        text = stdout;
-        console.log("pdftotext successful, extracted length:", text.length);
+        // Convert buffer to base64 for Gemini API
+        const base64Pdf = req.file.buffer.toString("base64");
+        
+        // Call Google Gemini API with vision capabilities
+        const geminiResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": process.env.Syllabus_API_KEY
+          },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                {
+                  inline_data: {
+                    mime_type: "application/pdf",
+                    data: base64Pdf
+                  }
+                },
+                {
+                  text: "Extract all text from this PDF document. Include all course information, assignments, deadlines, and grading details."
+                }
+              ]
+            }]
+          })
+        });
 
-        if (!text || text.trim().length < 50) {
-          console.log("pdftotext failed or returned little text, trying pdf-parse...");
-          const data = await pdfParse(req.file.buffer);
-          text = data.text;
+        const geminiData = await geminiResponse.json();
+        
+        if (!geminiResponse.ok || !geminiData.candidates?.[0]?.content?.parts?.[0]?.text) {
+          throw new Error("Gemini API failed to extract content");
         }
+        
+        text = geminiData.candidates[0].content.parts[0].text;
+        console.log("Gemini extraction successful, text length:", text.length);
         
         if (!text || text.trim().length < 50) {
           throw new Error("Could not extract meaningful text from PDF");
         }
         
-        text = text.replace(/\s+/g, " ").substring(0, 50000);
+        text = text.substring(0, 50000);
       } catch (err) {
         console.error("PDF extraction failed:", err);
         return res.status(422).json({ 
