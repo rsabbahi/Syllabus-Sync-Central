@@ -4,7 +4,7 @@ import { useProfile, useUpdateProfile } from "@/hooks/use-profile";
 import { LoadingSpinner } from "@/components/loading";
 import { Button } from "@/components/button";
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, addDays, addMonths, subMonths, isSameMonth, isSameDay, isToday } from "date-fns";
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Calendar as CalIcon, Info, Check, X, Copy } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Calendar as CalIcon, Info, Check, X } from "lucide-react";
 
 const COURSE_COLORS = [
   "bg-blue-500", "bg-purple-500", "bg-emerald-500", "bg-orange-500",
@@ -21,28 +21,36 @@ const TYPE_BADGE: Record<string, string> = {
 
 type CalType = "google" | "apple" | "outlook";
 
-function detectType(url: string): CalType {
-  if (url.includes("calendar.google.com")) return "google";
-  if (url.includes("outlook") || url.includes("live.com") || url.includes("office365")) return "outlook";
-  return "apple";
+const CAL_TYPES: { id: CalType; label: string }[] = [
+  { id: "google",  label: "Google Calendar" },
+  { id: "apple",   label: "Apple Calendar" },
+  { id: "outlook", label: "Outlook" },
+];
+
+/** Convert any calendar URL into something that can be iframed.
+ *  - Google embed URLs → use as-is
+ *  - webcal:// or plain iCal feed URLs → route through Google Calendar embed
+ *  - Everything else → use as-is
+ */
+function toEmbedUrl(raw: string): string {
+  const url = raw.trim();
+  // Already a Google Calendar embed page
+  if (url.includes("calendar.google.com/calendar/embed")) return url;
+  // webcal or raw ical feed → wrap in Google Calendar embed viewer
+  if (url.startsWith("webcal://") || url.includes(".ics")) {
+    const feed = url.replace(/^webcal:\/\//, "https://");
+    return `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(feed)}`;
+  }
+  // Outlook published HTML link — use as-is (renders as a full calendar page)
+  return url;
 }
 
+/** Pull the src attribute out of a pasted <iframe> tag, or return the raw URL */
 function extractEmbedSrc(input: string): string {
   const srcMatch = input.match(/src="([^"]+)"/);
   if (srcMatch) return srcMatch[1];
   return input.trim();
 }
-
-function isIframeable(url: string): boolean {
-  const t = detectType(url);
-  return t === "google" || t === "outlook";
-}
-
-const CAL_TYPES: { id: CalType; label: string; logo: string }[] = [
-  { id: "google", label: "Google Calendar", logo: "https://ssl.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png" },
-  { id: "apple",  label: "Apple Calendar",  logo: "https://www.apple.com/favicon.ico" },
-  { id: "outlook", label: "Outlook",         logo: "https://outlook.live.com/favicon.ico" },
-];
 
 const INSTRUCTIONS: Record<CalType, { title: string; steps: React.ReactNode[]; placeholder: string; inputLabel: string }> = {
   google: {
@@ -51,32 +59,32 @@ const INSTRUCTIONS: Record<CalType, { title: string; steps: React.ReactNode[]; p
       <>Open <a href="https://calendar.google.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">calendar.google.com</a> → click the <strong className="text-foreground">gear icon</strong> → <strong className="text-foreground">Settings</strong>.</>,
       <>In the left panel under <strong className="text-foreground">"Settings for my calendars"</strong>, click the calendar you want (usually your name).</>,
       <>Scroll to <strong className="text-foreground">"Integrate calendar"</strong> → find the <strong className="text-foreground">"Embed code"</strong> box.</>,
-      <>Copy the full <code className="bg-secondary px-1 py-0.5 rounded text-xs">&lt;iframe&gt;</code> tag or just the URL inside <code className="bg-secondary px-1 py-0.5 rounded text-xs">src="..."</code>.</>,
+      <>Copy the full <code className="bg-secondary px-1 py-0.5 rounded text-xs">&lt;iframe&gt;</code> tag or just the URL inside <code className="bg-secondary px-1 py-0.5 rounded text-xs">src="..."</code> and paste below.</>,
     ],
-    placeholder: `<iframe src="https://calendar.google.com/calendar/embed?src=..." ...></iframe>\n\nor just:\nhttps://calendar.google.com/calendar/embed?src=...`,
-    inputLabel: "Paste your embed code or src URL",
+    placeholder: `<iframe src="https://calendar.google.com/calendar/embed?src=..." ...></iframe>\n\nor just the URL:\nhttps://calendar.google.com/calendar/embed?src=...`,
+    inputLabel: "Paste your embed code or URL",
   },
   apple: {
-    title: "How to get your iCloud Calendar link",
+    title: "How to get your Apple iCloud Calendar link",
     steps: [
-      <>Open the <strong className="text-foreground">Calendar</strong> app on your Mac or iPhone.</>,
-      <>Right-click (or long-press) your calendar name in the sidebar → <strong className="text-foreground">Share Calendar</strong>.</>,
-      <>Turn on <strong className="text-foreground">Public Calendar</strong> — this generates a shareable link.</>,
-      <>Click <strong className="text-foreground">Copy Link</strong>. The URL starts with <code className="bg-secondary px-1 py-0.5 rounded text-xs">webcal://</code> or <code className="bg-secondary px-1 py-0.5 rounded text-xs">https://</code>.</>,
+      <>Open <strong className="text-foreground">Calendar</strong> on your Mac or iPhone.</>,
+      <>Right-click your calendar → <strong className="text-foreground">Share Calendar</strong> → enable <strong className="text-foreground">Public Calendar</strong>.</>,
+      <>Click <strong className="text-foreground">Copy Link</strong> — the URL starts with <code className="bg-secondary px-1 py-0.5 rounded text-xs">webcal://</code>.</>,
+      <>Paste that link below. It will display embedded in your calendar here.</>,
     ],
-    placeholder: "webcal://p25-caldav.icloud.com/published/2/...\n\nor the https:// version",
+    placeholder: "webcal://p25-caldav.icloud.com/published/2/...",
     inputLabel: "Paste your iCloud Calendar link",
   },
   outlook: {
     title: "How to get your Outlook Calendar embed URL",
     steps: [
-      <>Open <a href="https://outlook.live.com/calendar" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">outlook.live.com/calendar</a> → click the <strong className="text-foreground">Settings gear</strong>.</>,
-      <>Go to <strong className="text-foreground">View all Outlook settings</strong> → <strong className="text-foreground">Calendar</strong> → <strong className="text-foreground">Shared calendars</strong>.</>,
-      <>Under <strong className="text-foreground">Publish a calendar</strong>, select your calendar and choose <strong className="text-foreground">HTML</strong> from the format drop-down.</>,
-      <>Click <strong className="text-foreground">Publish</strong>, then copy the <strong className="text-foreground">HTML link</strong> that appears.</>,
+      <>Open <a href="https://outlook.live.com/calendar" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">outlook.live.com/calendar</a> → <strong className="text-foreground">Settings</strong> → <strong className="text-foreground">View all Outlook settings</strong>.</>,
+      <>Go to <strong className="text-foreground">Calendar</strong> → <strong className="text-foreground">Shared calendars</strong>.</>,
+      <>Under <strong className="text-foreground">Publish a calendar</strong>, pick your calendar, choose <strong className="text-foreground">HTML</strong>, click <strong className="text-foreground">Publish</strong>.</>,
+      <>Copy the <strong className="text-foreground">HTML link</strong> and paste below.</>,
     ],
     placeholder: "https://outlook.live.com/calendar/published/...",
-    inputLabel: "Paste your Outlook embed URL",
+    inputLabel: "Paste your Outlook calendar URL",
   },
 };
 
@@ -87,41 +95,34 @@ export default function Calendar() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
 
+  // Which tab of the main calendar card is active
+  const [activeTab, setActiveTab] = useState<"academic" | "my-calendar">("academic");
+
   // Import wizard state
   const [selectedType, setSelectedType] = useState<CalType>("google");
   const [embedInput, setEmbedInput] = useState("");
-  const [copied, setCopied] = useState(false);
 
   if (isLoading || profileLoading) return <LoadingSpinner />;
 
   const savedUrl = profile?.googleCalendarEmbedUrl;
-  const calType = savedUrl ? detectType(savedUrl) : null;
-  const canEmbed = savedUrl ? isIframeable(savedUrl) : false;
+  const embedSrc = savedUrl ? toEmbedUrl(savedUrl) : null;
 
   const handleSave = () => {
     const url = extractEmbedSrc(embedInput);
     if (!url) return;
     updateProfile.mutate({ googleCalendarEmbedUrl: url }, {
-      onSuccess: () => setEmbedInput(""),
+      onSuccess: () => {
+        setEmbedInput("");
+        setActiveTab("my-calendar"); // Switch to show the embedded calendar after saving
+      },
     });
   };
 
   const handleDisconnect = () => {
-    updateProfile.mutate({ googleCalendarEmbedUrl: null });
+    updateProfile.mutate({ googleCalendarEmbedUrl: null }, {
+      onSuccess: () => setActiveTab("academic"),
+    });
   };
-
-  const handleCopy = () => {
-    if (savedUrl) {
-      navigator.clipboard.writeText(savedUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  // Apple webcal → subscribe URL
-  const appleSubscribeUrl = savedUrl
-    ? savedUrl.replace(/^webcal:\/\//, "https://")
-    : "";
 
   // Build course color map
   const courseIds = [...new Set(events.map(e => e.courseId))];
@@ -129,8 +130,7 @@ export default function Calendar() {
   courseIds.forEach((id, i) => { courseColorMap[id] = COURSE_COLORS[i % COURSE_COLORS.length]; });
 
   // Calendar grid
-  const monthStart = startOfMonth(currentDate);
-  const calStart = startOfWeek(monthStart);
+  const calStart = startOfWeek(startOfMonth(currentDate));
   const calEnd = endOfWeek(endOfMonth(currentDate));
   const days: Date[] = [];
   let d = calStart;
@@ -160,197 +160,179 @@ export default function Calendar() {
         </Button>
       </div>
 
-      {/* ── External Calendar section (above the grid) ── */}
-      {!savedUrl ? (
-        /* Import wizard — shown only when no calendar is connected */
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden" data-testid="section-calendar-import">
-          <div className="p-5 border-b border-border">
-            <div className="flex items-center gap-3">
-              <CalIcon className="w-5 h-5 text-primary" />
-              <h3 className="font-display font-bold text-lg text-foreground">Connect Your External Calendar</h3>
-            </div>
-            <p className="text-sm text-muted-foreground mt-1">Embed your personal calendar so it appears right here alongside your academic deadlines.</p>
-          </div>
-
-          <div className="p-6 space-y-6">
-            {/* Type selector */}
-            <div className="flex gap-3 flex-wrap">
-              {CAL_TYPES.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => setSelectedType(t.id)}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 font-semibold text-sm transition-all ${selectedType === t.id ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
-                  data-testid={`button-cal-type-${t.id}`}
-                >
-                  <img src={t.logo} alt="" className="w-4 h-4 object-contain" onError={e => (e.currentTarget.style.display = "none")} />
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Instructions */}
-            <div className="bg-primary/5 border border-primary/15 rounded-xl p-4 space-y-3">
-              <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-                <Info className="w-4 h-4 shrink-0" />
-                {inst.title}
-              </div>
-              <ol className="space-y-2 text-sm text-muted-foreground list-none">
-                {inst.steps.map((step, i) => (
-                  <li key={i} className="flex gap-3">
-                    <span className="shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary font-bold text-xs flex items-center justify-center mt-0.5">{i + 1}</span>
-                    <span>{step}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-
-            {/* Input */}
-            <div className="space-y-3">
-              <label className="text-sm font-semibold text-foreground">{inst.inputLabel}</label>
-              <textarea
-                className="w-full h-24 rounded-xl border border-border bg-secondary/40 px-4 py-3 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                placeholder={inst.placeholder}
-                value={embedInput}
-                onChange={e => setEmbedInput(e.target.value)}
-                data-testid="input-embed-code"
-              />
-              <Button
-                variant="primary"
-                onClick={handleSave}
-                disabled={!embedInput.trim() || updateProfile.isPending}
-                data-testid="button-save-embed"
-              >
-                <Check className="w-4 h-4 mr-2" />
-                {updateProfile.isPending ? "Connecting..." : "Connect Calendar"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* Connected calendar — import wizard gone, just show the calendar */
-        <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden" data-testid="section-calendar-connected">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-            <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-              <CalIcon className="w-4 h-4 text-primary" />
-              {calType === "google" && "Google Calendar"}
-              {calType === "apple" && "Apple iCloud Calendar"}
-              {calType === "outlook" && "Outlook Calendar"}
-            </div>
-            <button
-              onClick={handleDisconnect}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-destructive transition-colors"
-              data-testid="button-disconnect-calendar"
-              title="Disconnect calendar"
-            >
-              <X className="w-3.5 h-3.5" />
-              Disconnect
-            </button>
-          </div>
-
-          {canEmbed ? (
-            /* Google / Outlook — iframe embed */
-            <div style={{ height: 600 }}>
-              <iframe
-                src={savedUrl}
-                className="w-full h-full border-0"
-                title="External Calendar"
-                data-testid="google-calendar-iframe"
-              />
-            </div>
-          ) : (
-            /* Apple iCloud — can't iframe; show subscription panel */
-            <div className="p-8 text-center space-y-5">
-              <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto">
-                <CalIcon className="w-8 h-8 text-primary" />
-              </div>
-              <div>
-                <h4 className="font-display font-bold text-lg mb-1">iCloud Calendar Connected</h4>
-                <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                  Apple iCloud calendars can't be displayed as an embedded view. Use the buttons below to open or subscribe to your calendar in another app.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-3 justify-center">
-                <a href={savedUrl} className="inline-flex">
-                  <Button variant="primary" data-testid="button-open-apple-calendar">
-                    Open in Calendar App
-                  </Button>
-                </a>
-                <a href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(appleSubscribeUrl)}`} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" data-testid="button-add-to-google">
-                    Add to Google Calendar
-                  </Button>
-                </a>
-                <Button variant="outline" onClick={handleCopy} data-testid="button-copy-url">
-                  <Copy className="w-4 h-4 mr-2" />
-                  {copied ? "Copied!" : "Copy URL"}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground font-mono break-all max-w-lg mx-auto opacity-60">{savedUrl}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── SyllabusSync assignment calendar grid ── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-        {/* Calendar */}
+        {/* Main calendar card — unified with tabs */}
         <div className="xl:col-span-2 bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between p-5 border-b border-border">
-            <button
-              onClick={() => setCurrentDate(subMonths(currentDate, 1))}
-              className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
-              data-testid="button-prev-month"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <h2 className="text-xl font-display font-bold text-foreground">
-              {format(currentDate, "MMMM yyyy")}
-            </h2>
-            <button
-              onClick={() => setCurrentDate(addMonths(currentDate, 1))}
-              className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
-              data-testid="button-next-month"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
 
-          <div className="grid grid-cols-7 border-b border-border">
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => (
-              <div key={d} className="p-3 text-center text-xs font-bold text-muted-foreground uppercase tracking-wider">{d}</div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-7">
-            {days.map((day, i) => {
-              const dayEvents = getEventsForDay(day);
-              const inMonth = isSameMonth(day, currentDate);
-              const isSelected = selectedDay && isSameDay(day, selectedDay);
-              const todayDay = isToday(day);
-              return (
+          {/* Tab bar */}
+          <div className="flex items-center border-b border-border">
+            <button
+              onClick={() => setActiveTab("academic")}
+              className={`px-5 py-4 text-sm font-semibold transition-colors border-b-2 -mb-px ${activeTab === "academic" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              data-testid="tab-academic"
+            >
+              SyllabusSync
+            </button>
+            <button
+              onClick={() => { setActiveTab("my-calendar"); }}
+              className={`px-5 py-4 text-sm font-semibold transition-colors border-b-2 -mb-px flex items-center gap-2 ${activeTab === "my-calendar" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              data-testid="tab-my-calendar"
+            >
+              <CalIcon className="w-3.5 h-3.5" />
+              My Calendar
+              {savedUrl && <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />}
+            </button>
+            {/* Month nav — only visible on academic tab */}
+            {activeTab === "academic" && (
+              <div className="flex items-center gap-1 ml-auto pr-4">
                 <button
-                  key={i}
-                  onClick={() => setSelectedDay(isSameDay(day, selectedDay!) ? null : day)}
-                  className={`min-h-[80px] p-1.5 border-b border-r border-border text-left transition-colors relative ${!inMonth ? "bg-secondary/30" : "hover:bg-secondary/50"} ${isSelected ? "bg-primary/10 ring-inset ring-2 ring-primary" : ""}`}
-                  data-testid={`day-${format(day, "yyyy-MM-dd")}`}
+                  onClick={() => setCurrentDate(subMonths(currentDate, 1))}
+                  className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
+                  data-testid="button-prev-month"
                 >
-                  <span className={`text-sm font-semibold w-7 h-7 flex items-center justify-center rounded-full mb-1 ${todayDay ? "bg-primary text-primary-foreground" : !inMonth ? "text-muted-foreground/40" : "text-foreground"}`}>
-                    {format(day, "d")}
-                  </span>
-                  <div className="space-y-0.5">
-                    {dayEvents.slice(0, 2).map(evt => (
-                      <div key={evt.id} className={`text-[10px] font-semibold text-white rounded px-1 py-0.5 truncate ${courseColorMap[evt.courseId]}`}>
-                        {evt.title}
-                      </div>
-                    ))}
-                    {dayEvents.length > 2 && (
-                      <div className="text-[10px] font-bold text-muted-foreground pl-1">+{dayEvents.length - 2} more</div>
-                    )}
-                  </div>
+                  <ChevronLeft className="w-4 h-4" />
                 </button>
-              );
-            })}
+                <span className="text-sm font-bold text-foreground px-1 min-w-[110px] text-center">
+                  {format(currentDate, "MMMM yyyy")}
+                </span>
+                <button
+                  onClick={() => setCurrentDate(addMonths(currentDate, 1))}
+                  className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
+                  data-testid="button-next-month"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            {/* Disconnect link — visible on my-calendar tab when connected */}
+            {activeTab === "my-calendar" && savedUrl && (
+              <button
+                onClick={handleDisconnect}
+                className="flex items-center gap-1 ml-auto mr-4 text-xs text-muted-foreground hover:text-destructive transition-colors"
+                data-testid="button-disconnect-calendar"
+              >
+                <X className="w-3 h-3" />
+                Disconnect
+              </button>
+            )}
           </div>
+
+          {/* ── Academic tab ── */}
+          {activeTab === "academic" && (
+            <>
+              <div className="grid grid-cols-7 border-b border-border">
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => (
+                  <div key={day} className="p-3 text-center text-xs font-bold text-muted-foreground uppercase tracking-wider">{day}</div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7">
+                {days.map((day, i) => {
+                  const dayEvents = getEventsForDay(day);
+                  const inMonth = isSameMonth(day, currentDate);
+                  const isSelected = selectedDay && isSameDay(day, selectedDay);
+                  const todayDay = isToday(day);
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setSelectedDay(isSameDay(day, selectedDay!) ? null : day)}
+                      className={`min-h-[80px] p-1.5 border-b border-r border-border text-left transition-colors ${!inMonth ? "bg-secondary/30" : "hover:bg-secondary/50"} ${isSelected ? "bg-primary/10 ring-inset ring-2 ring-primary" : ""}`}
+                      data-testid={`day-${format(day, "yyyy-MM-dd")}`}
+                    >
+                      <span className={`text-sm font-semibold w-7 h-7 flex items-center justify-center rounded-full mb-1 ${todayDay ? "bg-primary text-primary-foreground" : !inMonth ? "text-muted-foreground/40" : "text-foreground"}`}>
+                        {format(day, "d")}
+                      </span>
+                      <div className="space-y-0.5">
+                        {dayEvents.slice(0, 2).map(evt => (
+                          <div key={evt.id} className={`text-[10px] font-semibold text-white rounded px-1 py-0.5 truncate ${courseColorMap[evt.courseId]}`}>
+                            {evt.title}
+                          </div>
+                        ))}
+                        {dayEvents.length > 2 && (
+                          <div className="text-[10px] font-bold text-muted-foreground pl-1">+{dayEvents.length - 2} more</div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* ── My Calendar tab ── */}
+          {activeTab === "my-calendar" && (
+            <>
+              {embedSrc ? (
+                /* Show the embedded calendar — works for Google, Outlook, and Apple (via Google embed) */
+                <div style={{ height: 600 }}>
+                  <iframe
+                    src={embedSrc}
+                    className="w-full h-full border-0"
+                    title="My Calendar"
+                    data-testid="external-calendar-iframe"
+                  />
+                </div>
+              ) : (
+                /* No calendar connected — show the import wizard */
+                <div className="p-6 space-y-6" data-testid="section-calendar-import">
+                  <div>
+                    <h3 className="font-display font-bold text-lg text-foreground mb-1">Connect Your Calendar</h3>
+                    <p className="text-sm text-muted-foreground">Your personal calendar will appear right here, alongside SyllabusSync.</p>
+                  </div>
+
+                  {/* Type selector */}
+                  <div className="flex gap-3 flex-wrap">
+                    {CAL_TYPES.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelectedType(t.id)}
+                        className={`px-4 py-2 rounded-xl border-2 font-semibold text-sm transition-all ${selectedType === t.id ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                        data-testid={`button-cal-type-${t.id}`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Instructions */}
+                  <div className="bg-primary/5 border border-primary/15 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+                      <Info className="w-4 h-4 shrink-0" />
+                      {inst.title}
+                    </div>
+                    <ol className="space-y-2 text-sm text-muted-foreground list-none">
+                      {inst.steps.map((step, i) => (
+                        <li key={i} className="flex gap-3">
+                          <span className="shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary font-bold text-xs flex items-center justify-center mt-0.5">{i + 1}</span>
+                          <span>{step}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+
+                  {/* Input */}
+                  <div className="space-y-3">
+                    <label className="text-sm font-semibold text-foreground">{inst.inputLabel}</label>
+                    <textarea
+                      className="w-full h-24 rounded-xl border border-border bg-secondary/40 px-4 py-3 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                      placeholder={inst.placeholder}
+                      value={embedInput}
+                      onChange={e => setEmbedInput(e.target.value)}
+                      data-testid="input-embed-code"
+                    />
+                    <Button
+                      variant="primary"
+                      onClick={handleSave}
+                      disabled={!embedInput.trim() || updateProfile.isPending}
+                      data-testid="button-save-embed"
+                    >
+                      <Check className="w-4 h-4 mr-2" />
+                      {updateProfile.isPending ? "Connecting..." : "Connect Calendar"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -373,7 +355,7 @@ export default function Calendar() {
             </div>
           )}
 
-          {selectedDay && (
+          {selectedDay && activeTab === "academic" && (
             <div className="bg-card rounded-2xl border border-border p-5 shadow-sm">
               <h3 className="font-display font-bold text-lg mb-4">{format(selectedDay, "MMMM d")}</h3>
               {selectedEvents.length === 0 ? (
