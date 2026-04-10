@@ -169,7 +169,6 @@ export const api = {
     upload: {
       method: 'POST' as const,
       path: '/api/courses/:courseId/syllabi' as const,
-      // Input is FormData
       responses: {
         200: z.object({ success: z.boolean(), message: z.string() })
       }
@@ -180,6 +179,30 @@ export const api = {
       responses: {
         204: z.void()
       }
+    }
+  },
+  prep: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/courses/:courseId/prep' as const,
+      responses: { 200: z.custom<any>() }
+    },
+    generate: {
+      method: 'POST' as const,
+      path: '/api/courses/:courseId/prep' as const,
+      responses: { 200: z.custom<any>() }
+    }
+  },
+  resources: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/assignments/:assignmentId/resources' as const,
+      responses: { 200: z.custom<any>() }
+    },
+    generate: {
+      method: 'POST' as const,
+      path: '/api/assignments/:assignmentId/resources' as const,
+      responses: { 200: z.custom<any>() }
     }
   }
 };

@@ -177,8 +177,13 @@ export async function registerRoutes(
     try {
       const userId = req.user.claims.sub;
       const input = api.tasks.create.input.parse(req.body);
-      const task = await storage.createTask(userId, input);
-      res.status(201).json(task);
+      if (input.recurrenceRule) {
+        const allTasks = await storage.createTaskWithRecurrence(userId, input);
+        res.status(201).json(allTasks[0]); // return the parent task
+      } else {
+        const task = await storage.createTask(userId, input);
+        res.status(201).json(task);
+      }
     } catch (err) {
       res.status(500).json({ message: "Internal server error" });
     }
@@ -198,7 +203,12 @@ export async function registerRoutes(
   app.delete(api.tasks.delete.path, async (req: any, res) => {
     try {
       const id = Number(req.params.id);
-      await storage.deleteTask(id);
+      const deleteAll = req.query.deleteAll === "true";
+      if (deleteAll) {
+        await storage.deleteTaskAndRecurrences(id);
+      } else {
+        await storage.deleteTask(id);
+      }
       res.status(204).send();
     } catch (err) {
       res.status(500).json({ message: "Internal server error" });
@@ -584,6 +594,134 @@ RULES (NON-NEGOTIABLE):
     } catch (err) {
       console.error("Delete syllabus error:", err);
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // === PRE-LECTURE PREP ROUTES (T002) ===
+  app.get(api.prep.get.path, async (req: any, res) => {
+    try {
+      const courseId = Number(req.params.courseId);
+      const cached = await storage.getPrepCache(courseId);
+      if (!cached) return res.status(404).json({ message: "No prep content yet" });
+      res.json(cached.content);
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post(api.prep.generate.path, async (req: any, res) => {
+    try {
+      const courseId = Number(req.params.courseId);
+      const syllabi = await storage.getSyllabiForCourse(courseId);
+      if (syllabi.length === 0) return res.status(404).json({ message: "No syllabus uploaded for this course" });
+
+      const syllabus = syllabi[0];
+      const rawText = syllabus.rawText || "";
+      const parsedContent = syllabus.parsedContent as any;
+
+      const systemPrompt = `You are an expert academic tutor helping college students prepare for their courses.
+Given a course syllabus, generate structured pre-lecture prep content.
+Respond ONLY with valid JSON matching this exact schema:
+{
+  "summary": "2-3 paragraph overview of the course's key themes and learning objectives",
+  "topics": ["topic 1", "topic 2", ...],  // up to 10 key topics from the syllabus
+  "readingPrompts": [
+    "Reflective reading prompt 1",
+    ...
+  ],  // exactly 5 deep reading prompts to guide active reading
+  "practiceQuestions": [
+    "Practice question 1",
+    ...
+  ]  // exactly 5 practice questions mixing conceptual and applied
+}`;
+
+      const userPrompt = `Course syllabus content:\n\n${rawText.slice(0, 6000)}`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.4,
+      });
+
+      const raw = completion.choices[0].message.content || "{}";
+      const parsed = JSON.parse(raw);
+      const content = {
+        summary: parsed.summary || "",
+        topics: parsed.topics || [],
+        readingPrompts: parsed.readingPrompts || [],
+        practiceQuestions: parsed.practiceQuestions || [],
+        generatedAt: new Date().toISOString(),
+      };
+
+      const cached = await storage.upsertPrepCache(courseId, content);
+      res.json(cached.content);
+    } catch (err) {
+      console.error("Prep generation error:", err);
+      res.status(500).json({ message: "Failed to generate prep content" });
+    }
+  });
+
+  // === STUDY RESOURCE ROUTES (T004) ===
+  app.get(api.resources.get.path, async (req: any, res) => {
+    try {
+      const assignmentId = Number(req.params.assignmentId);
+      const cached = await storage.getAssignmentResources(assignmentId);
+      if (!cached) return res.status(404).json({ message: "No resources yet" });
+      res.json(cached.resources);
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post(api.resources.generate.path, async (req: any, res) => {
+    try {
+      const assignmentId = Number(req.params.assignmentId);
+      const assignment = await storage.getAssignment(assignmentId);
+      if (!assignment) return res.status(404).json({ message: "Assignment not found" });
+
+      const systemPrompt = `You are an academic resource curator. Given an assignment name and type, return a JSON array of 6 highly relevant study resource links.
+Each link must be real and follow known URL patterns. Use these platforms:
+- YouTube: https://www.youtube.com/results?search_query=ENCODED_QUERY
+- Khan Academy: https://www.khanacademy.org/search?page_search_query=ENCODED_QUERY
+- MIT OpenCourseWare: https://ocw.mit.edu/search/?q=ENCODED_QUERY
+- Google Scholar: https://scholar.google.com/scholar?q=ENCODED_QUERY
+- Wikipedia: https://en.wikipedia.org/w/index.php?search=ENCODED_QUERY
+- Coursera: https://www.coursera.org/search?query=ENCODED_QUERY
+
+Return ONLY a JSON array with objects: { "title": string, "url": string, "platform": string }
+Make the search queries specific to the assignment topic. URL-encode the query in the URLs.`;
+
+      const userPrompt = `Assignment: "${assignment.name}" (type: ${assignment.type})
+Provide 6 study resources that would help a student complete this assignment.`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.3,
+      });
+
+      const raw = completion.choices[0].message.content || "{}";
+      let resources = [];
+      try {
+        const parsed = JSON.parse(raw);
+        resources = Array.isArray(parsed) ? parsed : (parsed.resources || parsed.links || []);
+      } catch {
+        resources = [];
+      }
+
+      const saved = await storage.upsertAssignmentResources(assignmentId, resources);
+      res.json(saved.resources);
+    } catch (err) {
+      console.error("Resource generation error:", err);
+      res.status(500).json({ message: "Failed to generate resources" });
     }
   });
 

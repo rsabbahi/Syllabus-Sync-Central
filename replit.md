@@ -6,10 +6,14 @@ SyllabusSync is a student workflow management web application. It helps students
 
 - **Course management**: Create or join courses using a code/section system
 - **Syllabus parsing**: Upload a PDF syllabus; the server extracts text and uses OpenAI to auto-generate assignments and tasks
+- **Class Linking (Crowdsourced Canonical)**: Courses already have "Syllabus Ready" badge when another student uploaded a syllabus; unjoined courses are shown in a separate "Available to Link In" section with a "Link In" CTA so students instantly get all extracted assignments
+- **Pre-Lecture Study Prep**: "Study Prep" tab on course details — GPT-4o generates a course summary, key topics list, 5 reading prompts, and 5 practice questions from the uploaded syllabus; results are cached in `prep_cache` table
+- **Study Resource Links**: Each assignment row has a collapsible "Resources" panel; click "Generate Links" to get 6 AI-curated study resource links (YouTube, Khan Academy, MIT OCW, Google Scholar, Wikipedia, Coursera); results are cached in `assignment_resources` table
+- **Recurring Tasks**: Task creation form has a "Make this recurring" toggle with weekly/biweekly/monthly options and an optional day-of-week picker; auto-generates up to 12 instances linked by `recurrenceParentId`; delete prompt lets users remove just one or all occurrences
 - **Grade tracker**: Enter scores per assignment and see live current grade and "what-if" projections
-- **Calendar**: Aggregated deadline view with iCal export and Google Calendar deep-link support
-- **Task manager**: Personal to-do list (auto-generated from syllabi or manually created)
-- **User profile**: Avatar (emoji preset or file upload), university, bio
+- **Calendar**: Aggregated deadline view with iCal export; Google Calendar iframe embed (URL saved to user profile)
+- **Task manager**: Personal to-do list (auto-generated from syllabi or manually created, with recurrence support)
+- **User profile**: Avatar (emoji preset or file upload), university, bio, Google Calendar embed URL
 
 The app uses **Replit Auth** (OpenID Connect) for authentication. All app routes are protected and tied to the authenticated user's ID.
 

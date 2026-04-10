@@ -4,7 +4,7 @@ import { useCourses, useCreateCourse, useJoinCourse } from "@/hooks/use-courses"
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
 import { LoadingSpinner } from "@/components/loading";
-import { BookOpen, Plus, Search, Users, ArrowRight, X } from "lucide-react";
+import { BookOpen, Plus, Search, Users, ArrowRight, X, Link2, FileText } from "lucide-react";
 
 export default function Courses() {
   const { data: courses, isLoading } = useCourses();
@@ -28,6 +28,9 @@ export default function Courses() {
     c.code.toLowerCase().includes(search.toLowerCase())
   );
 
+  const myCourses = filteredCourses?.filter(c => c.isEnrolled) || [];
+  const availableCourses = filteredCourses?.filter(c => !c.isEnrolled) || [];
+
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     createCourse.mutate(formData, {
@@ -45,7 +48,7 @@ export default function Courses() {
           <h1 className="text-4xl font-display font-bold">Course Directory</h1>
           <p className="text-muted-foreground mt-2">Find and join your classes, or create a new one.</p>
         </div>
-        <Button onClick={() => setIsCreating(true)}>
+        <Button onClick={() => setIsCreating(true)} data-testid="button-new-course">
           <Plus className="w-4 h-4 mr-2" /> New Course
         </Button>
       </div>
@@ -60,12 +63,12 @@ export default function Courses() {
           </button>
           <h2 className="text-xl font-display font-bold mb-4">Create a Course</h2>
           <form onSubmit={handleCreate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input label="Course Code (e.g. CS101)" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} required />
-            <Input label="Course Name" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
-            <Input label="Section (e.g. 01)" value={formData.section} onChange={e => setFormData({...formData, section: e.target.value})} required />
-            <Input label="Term (e.g. Fall 2024)" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})} required />
+            <Input label="Course Code (e.g. CS101)" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} required data-testid="input-course-code" />
+            <Input label="Course Name" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required data-testid="input-course-name" />
+            <Input label="Section (e.g. 01)" value={formData.section} onChange={e => setFormData({...formData, section: e.target.value})} required data-testid="input-course-section" />
+            <Input label="Term (e.g. Fall 2024)" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})} required data-testid="input-course-term" />
             <div className="md:col-span-2 flex justify-end mt-2">
-              <Button type="submit" isLoading={createCourse.isPending}>Create & Join</Button>
+              <Button type="submit" isLoading={createCourse.isPending} data-testid="button-create-course">Create & Join</Button>
             </div>
           </form>
         </div>
@@ -78,54 +81,110 @@ export default function Courses() {
           className="pl-12"
           value={search}
           onChange={e => setSearch(e.target.value)}
+          data-testid="input-search-courses"
         />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredCourses?.map(course => (
-          <div key={course.id} className="bg-card rounded-2xl p-6 shadow-sm border border-border hover:shadow-md transition-all group flex flex-col">
-            <div className="flex justify-between items-start mb-4">
-              <div className="bg-primary/10 text-primary px-3 py-1 rounded-lg text-sm font-bold font-display">
-                {course.code}
-              </div>
-              <div className="flex items-center text-muted-foreground text-sm font-medium">
-                <Users className="w-4 h-4 mr-1" /> {course.studentCount}
-              </div>
-            </div>
-            
-            <h3 className="text-xl font-bold font-display leading-tight mb-2 line-clamp-2">
-              {course.name}
-            </h3>
-            
-            <p className="text-muted-foreground text-sm mb-6 flex-1">
-              Section {course.section} • {course.term}
-            </p>
-            
-            {course.isEnrolled ? (
-              <Link href={`/courses/${course.id}`} className="block w-full">
-                <Button variant="outline" className="w-full group-hover:border-primary group-hover:text-primary transition-colors">
-                  Go to Course <ArrowRight className="w-4 h-4 ml-2" />
-                </Button>
-              </Link>
-            ) : (
-              <Button 
-                className="w-full" 
-                onClick={() => joinCourse.mutate(course.id)}
-                isLoading={joinCourse.isPending}
-              >
-                Join Course
-              </Button>
-            )}
+      {/* My Courses */}
+      {myCourses.length > 0 && (
+        <section>
+          <h2 className="text-lg font-display font-bold text-foreground mb-4">My Courses</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {myCourses.map(course => (
+              <CourseCard key={course.id} course={course} onJoin={() => {}} isJoining={false} />
+            ))}
           </div>
-        ))}
-        
-        {filteredCourses?.length === 0 && (
-          <div className="col-span-full py-12 text-center text-muted-foreground">
-            <BookOpen className="w-12 h-12 mx-auto mb-4 opacity-20" />
-            <p className="text-lg">No courses found matching "{search}"</p>
+        </section>
+      )}
+
+      {/* Available to Link In */}
+      {availableCourses.length > 0 && (
+        <section>
+          <div className="flex items-center gap-3 mb-4">
+            <Link2 className="w-5 h-5 text-primary" />
+            <h2 className="text-lg font-display font-bold text-foreground">Available to Link In</h2>
+            <span className="text-xs bg-primary/10 text-primary font-bold px-2 py-0.5 rounded-full">Crowdsourced</span>
           </div>
-        )}
+          <p className="text-sm text-muted-foreground mb-4">
+            These courses already have syllabi uploaded by other students. Link in to instantly get their assignments, deadlines, and calendar — no upload needed.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {availableCourses.map(course => (
+              <CourseCard
+                key={course.id}
+                course={course}
+                onJoin={() => joinCourse.mutate(course.id)}
+                isJoining={joinCourse.isPending}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {filteredCourses?.length === 0 && (
+        <div className="col-span-full py-12 text-center text-muted-foreground">
+          <BookOpen className="w-12 h-12 mx-auto mb-4 opacity-20" />
+          <p className="text-lg">No courses found matching "{search}"</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CourseCard({ course, onJoin, isJoining }: { course: any, onJoin: () => void, isJoining: boolean }) {
+  const hasCanonicalSyllabus = (course.syllabi?.length || 0) > 0;
+
+  return (
+    <div className="bg-card rounded-2xl p-6 shadow-sm border border-border hover:shadow-md transition-all group flex flex-col" data-testid={`card-course-${course.id}`}>
+      <div className="flex justify-between items-start mb-3">
+        <div className="bg-primary/10 text-primary px-3 py-1 rounded-lg text-sm font-bold font-display">
+          {course.code}
+        </div>
+        <div className="flex items-center gap-2">
+          {hasCanonicalSyllabus && (
+            <span className="flex items-center gap-1 text-xs font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 px-2 py-0.5 rounded-full" data-testid={`badge-canonical-${course.id}`}>
+              <FileText className="w-3 h-3" />
+              Syllabus Ready
+            </span>
+          )}
+          <div className="flex items-center text-muted-foreground text-sm font-medium">
+            <Users className="w-4 h-4 mr-1" /> {course.studentCount}
+          </div>
+        </div>
       </div>
+      
+      <h3 className="text-xl font-bold font-display leading-tight mb-2 line-clamp-2">
+        {course.name}
+      </h3>
+      
+      <p className="text-muted-foreground text-sm mb-5 flex-1">
+        Section {course.section} • {course.term}
+      </p>
+
+      {hasCanonicalSyllabus && !course.isEnrolled && (
+        <p className="text-xs text-muted-foreground bg-secondary rounded-lg px-3 py-2 mb-3">
+          {course.assignments?.length || 0} assignments already extracted and ready for you.
+        </p>
+      )}
+      
+      {course.isEnrolled ? (
+        <Link href={`/courses/${course.id}`} className="block w-full">
+          <Button variant="outline" className="w-full group-hover:border-primary group-hover:text-primary transition-colors" data-testid={`button-goto-course-${course.id}`}>
+            Go to Course <ArrowRight className="w-4 h-4 ml-2" />
+          </Button>
+        </Link>
+      ) : (
+        <Button 
+          variant="primary"
+          className="w-full"
+          onClick={onJoin}
+          isLoading={isJoining}
+          data-testid={`button-join-course-${course.id}`}
+        >
+          <Link2 className="w-4 h-4 mr-2" />
+          {hasCanonicalSyllabus ? "Link In" : "Join Course"}
+        </Button>
+      )}
     </div>
   );
 }

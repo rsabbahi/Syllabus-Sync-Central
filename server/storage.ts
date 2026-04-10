@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, isNull } from "drizzle-orm";
 import {
   courses,
   courseStudents,
@@ -8,6 +8,8 @@ import {
   userGrades,
   tasks,
   users,
+  prepCache,
+  assignmentResources,
   type User,
   type Course,
   type CourseStudent,
@@ -15,6 +17,8 @@ import {
   type Assignment,
   type UserGrade,
   type Task,
+  type PrepCache,
+  type AssignmentResources,
   type InsertCourse,
   type InsertTask,
   type UpdateTask,
@@ -24,8 +28,11 @@ import {
   type UpdateUserProfile,
   type CourseResponse,
   type CourseGradeTrackerResponse,
-  type GradeTrackerItem
+  type GradeTrackerItem,
+  type PrepContent,
+  type ResourceLink
 } from "@shared/schema";
+import { addWeeks } from "date-fns";
 
 export interface IStorage {
   // Profile
@@ -43,9 +50,11 @@ export interface IStorage {
   // Syllabus
   addSyllabus(courseId: number, userId: string, fileUrl: string, rawText: string, parsedContent: any): Promise<Syllabus>;
   deleteSyllabus(id: number): Promise<void>;
+  getSyllabiForCourse(courseId: number): Promise<Syllabus[]>;
 
   // Assignments
   getAssignmentsByCourse(courseId: number): Promise<Assignment[]>;
+  getAssignment(id: number): Promise<Assignment | undefined>;
   clearCourseAssignments(courseId: number): Promise<void>;
   createAssignment(courseId: number, assignment: Omit<InsertAssignment, "courseId">): Promise<Assignment>;
   updateAssignment(id: number, updates: UpdateAssignment): Promise<Assignment>;
@@ -59,9 +68,19 @@ export interface IStorage {
   // Tasks
   getTasksByUser(userId: string): Promise<Task[]>;
   createTask(userId: string, task: InsertTask): Promise<Task>;
+  createTaskWithRecurrence(userId: string, task: InsertTask): Promise<Task[]>;
   updateTask(id: number, updates: UpdateTask): Promise<Task>;
   deleteTask(id: number): Promise<void>;
-  
+  deleteTaskAndRecurrences(parentId: number): Promise<void>;
+
+  // Prep Cache (T002)
+  getPrepCache(courseId: number): Promise<PrepCache | undefined>;
+  upsertPrepCache(courseId: number, content: PrepContent): Promise<PrepCache>;
+
+  // Assignment Resources (T004)
+  getAssignmentResources(assignmentId: number): Promise<AssignmentResources | undefined>;
+  upsertAssignmentResources(assignmentId: number, resources: ResourceLink[]): Promise<AssignmentResources>;
+
   // Helpers
   generateTasksForAssignment(userId: string, assignment: Assignment): Promise<void>;
 }
@@ -91,7 +110,7 @@ export class DatabaseStorage implements IStorage {
 
   async createCourse(course: InsertCourse, userId: string): Promise<Course> {
     const [newCourse] = await db.insert(courses).values({ ...course, createdBy: userId }).returning();
-    await this.joinCourse(newCourse.id, userId); // creator automatically joins
+    await this.joinCourse(newCourse.id, userId);
     return newCourse;
   }
 
@@ -115,7 +134,6 @@ export class DatabaseStorage implements IStorage {
     const courseAssignments = await this.getAssignmentsByCourse(courseId);
     const courseSyllabi = await db.select().from(syllabi).where(eq(syllabi.courseId, courseId));
     const students = await db.select().from(courseStudents).where(eq(courseStudents.courseId, courseId));
-    
     const isEnrolled = students.some(s => s.userId === userId);
 
     return {
@@ -129,11 +147,7 @@ export class DatabaseStorage implements IStorage {
 
   async addSyllabus(courseId: number, userId: string, fileUrl: string, rawText: string, parsedContent: any): Promise<Syllabus> {
     const [newSyllabus] = await db.insert(syllabi).values({
-      courseId,
-      uploadedBy: userId,
-      fileUrl,
-      rawText,
-      parsedContent
+      courseId, uploadedBy: userId, fileUrl, rawText, parsedContent
     }).returning();
     return newSyllabus;
   }
@@ -142,19 +156,30 @@ export class DatabaseStorage implements IStorage {
     await db.delete(syllabi).where(eq(syllabi.id, id));
   }
 
+  async getSyllabiForCourse(courseId: number): Promise<Syllabus[]> {
+    return await db.select().from(syllabi).where(eq(syllabi.courseId, courseId));
+  }
+
   async getAssignmentsByCourse(courseId: number): Promise<Assignment[]> {
     return await db.select().from(assignments).where(eq(assignments.courseId, courseId)).orderBy(assignments.dueDate);
+  }
+
+  async getAssignment(id: number): Promise<Assignment | undefined> {
+    const [a] = await db.select().from(assignments).where(eq(assignments.id, id));
+    return a;
   }
 
   async clearCourseAssignments(courseId: number): Promise<void> {
     const courseAssignments = await this.getAssignmentsByCourse(courseId);
     const assignmentIds = courseAssignments.map(a => a.id);
-    
     if (assignmentIds.length > 0) {
       await db.delete(tasks).where(inArray(tasks.assignmentId, assignmentIds));
       await db.delete(userGrades).where(inArray(userGrades.assignmentId, assignmentIds));
+      await db.delete(assignmentResources).where(inArray(assignmentResources.assignmentId, assignmentIds));
       await db.delete(assignments).where(eq(assignments.courseId, courseId));
     }
+    // Also clear prep cache when re-uploading
+    await db.delete(prepCache).where(eq(prepCache.courseId, courseId));
   }
 
   async createAssignment(courseId: number, assignment: Omit<InsertAssignment, "courseId">): Promise<Assignment> {
@@ -189,25 +214,16 @@ export class DatabaseStorage implements IStorage {
   async getGradeTracker(userId: string): Promise<CourseGradeTrackerResponse[]> {
     const enrolledCourses = await this.getEnrolledCourses(userId);
     const allGrades = await this.getUserGrades(userId);
-    
     const result: CourseGradeTrackerResponse[] = [];
-    
+
     for (const course of enrolledCourses) {
       const courseAssignments = await this.getAssignmentsByCourse(course.id);
-      const trackerItems: GradeTrackerItem[] = courseAssignments.map(a => {
-        const g = allGrades.find(g => g.assignmentId === a.id);
-        return {
-          assignment: a,
-          grade: g || null
-        };
-      });
-      
-      result.push({
-        ...course,
-        trackerItems
-      });
+      const trackerItems: GradeTrackerItem[] = courseAssignments.map(a => ({
+        assignment: a,
+        grade: allGrades.find(g => g.assignmentId === a.id) || null
+      }));
+      result.push({ ...course, trackerItems });
     }
-    
     return result;
   }
 
@@ -220,6 +236,44 @@ export class DatabaseStorage implements IStorage {
     return newTask;
   }
 
+  async createTaskWithRecurrence(userId: string, task: InsertTask): Promise<Task[]> {
+    const { recurrenceRule, recurrenceDayOfWeek } = task;
+
+    // Create the parent task first (no recurrenceParentId)
+    const [parent] = await db.insert(tasks).values({ ...task, userId, recurrenceParentId: null }).returning();
+
+    if (!recurrenceRule || recurrenceRule === null) return [parent];
+
+    const weeks = recurrenceRule === "weekly" ? 12 : recurrenceRule === "biweekly" ? 6 : 3;
+    const step = recurrenceRule === "biweekly" ? 2 : recurrenceRule === "monthly" ? 4 : 1;
+
+    const instances: Task[] = [parent];
+    let baseDate = new Date(task.dueDate);
+
+    for (let i = 1; i <= weeks; i += step) {
+      const nextDate = addWeeks(baseDate, step * (i === 1 ? 1 : 1));
+      // Adjust to same day of week if specified
+      if (recurrenceDayOfWeek !== null && recurrenceDayOfWeek !== undefined) {
+        while (nextDate.getDay() !== recurrenceDayOfWeek) {
+          nextDate.setDate(nextDate.getDate() + 1);
+        }
+      }
+      baseDate = new Date(nextDate);
+
+      const [instance] = await db.insert(tasks).values({
+        ...task,
+        userId,
+        dueDate: nextDate,
+        completed: false,
+        recurrenceParentId: parent.id,
+      }).returning();
+      instances.push(instance);
+      if (instances.length > 13) break; // safety cap
+    }
+
+    return instances;
+  }
+
   async updateTask(id: number, updates: UpdateTask): Promise<Task> {
     const [updated] = await db.update(tasks).set(updates).where(eq(tasks.id, id)).returning();
     return updated;
@@ -229,15 +283,58 @@ export class DatabaseStorage implements IStorage {
     await db.delete(tasks).where(eq(tasks.id, id));
   }
 
+  async deleteTaskAndRecurrences(parentId: number): Promise<void> {
+    // Delete all instances that have this task as parent, then the parent itself
+    await db.delete(tasks).where(eq(tasks.recurrenceParentId, parentId));
+    await db.delete(tasks).where(eq(tasks.id, parentId));
+  }
+
+  // Prep cache
+  async getPrepCache(courseId: number): Promise<PrepCache | undefined> {
+    const [row] = await db.select().from(prepCache).where(eq(prepCache.courseId, courseId));
+    return row;
+  }
+
+  async upsertPrepCache(courseId: number, content: PrepContent): Promise<PrepCache> {
+    const existing = await this.getPrepCache(courseId);
+    if (existing) {
+      const [updated] = await db.update(prepCache)
+        .set({ content, generatedAt: new Date() })
+        .where(eq(prepCache.courseId, courseId))
+        .returning();
+      return updated;
+    }
+    const [newRow] = await db.insert(prepCache).values({ courseId, content }).returning();
+    return newRow;
+  }
+
+  // Assignment resources
+  async getAssignmentResources(assignmentId: number): Promise<AssignmentResources | undefined> {
+    const [row] = await db.select().from(assignmentResources).where(eq(assignmentResources.assignmentId, assignmentId));
+    return row;
+  }
+
+  async upsertAssignmentResources(assignmentId: number, resources: ResourceLink[]): Promise<AssignmentResources> {
+    const existing = await this.getAssignmentResources(assignmentId);
+    if (existing) {
+      const [updated] = await db.update(assignmentResources)
+        .set({ resources, generatedAt: new Date() })
+        .where(eq(assignmentResources.assignmentId, assignmentId))
+        .returning();
+      return updated;
+    }
+    const [newRow] = await db.insert(assignmentResources).values({ assignmentId, resources }).returning();
+    return newRow;
+  }
+
   async generateTasksForAssignment(userId: string, assignment: Assignment): Promise<void> {
     const dueDate = new Date(assignment.dueDate);
     const tasksToCreate: InsertTask[] = [];
-    
+
     if (assignment.type.toLowerCase().includes('paper')) {
       const researchDate = new Date(dueDate);
       researchDate.setDate(researchDate.getDate() - 5);
       tasksToCreate.push({ title: `Start Research for ${assignment.name}`, dueDate: researchDate, assignmentId: assignment.id, isAutoGenerated: true, completed: false });
-      
       const writeDate = new Date(dueDate);
       writeDate.setDate(writeDate.getDate() - 2);
       tasksToCreate.push({ title: `Write Draft for ${assignment.name}`, dueDate: writeDate, assignmentId: assignment.id, isAutoGenerated: true, completed: false });
@@ -250,7 +347,7 @@ export class DatabaseStorage implements IStorage {
       startTask.setDate(startTask.getDate() - 1);
       tasksToCreate.push({ title: `Start working on ${assignment.name}`, dueDate: startTask, assignmentId: assignment.id, isAutoGenerated: true, completed: false });
     }
-    
+
     for (const t of tasksToCreate) {
       await this.createTask(userId, t);
     }
