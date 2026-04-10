@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useCalendarEvents, downloadIcal, getGoogleCalendarUrl, CalendarEvent } from "@/hooks/use-calendar";
+import { useProfile, useUpdateProfile } from "@/hooks/use-profile";
 import { LoadingSpinner } from "@/components/loading";
 import { Button } from "@/components/button";
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, addDays, addMonths, subMonths, isSameMonth, isSameDay, isToday } from "date-fns";
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Calendar as CalIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Calendar as CalIcon, Info, Check, Pencil } from "lucide-react";
 
 const COURSE_COLORS = [
   "bg-blue-500",
@@ -28,12 +29,42 @@ const TYPE_BADGE: Record<string, string> = {
   discussion: "bg-pink-100 text-pink-700",
 };
 
+function extractEmbedSrc(input: string): string {
+  const srcMatch = input.match(/src="([^"]+)"/);
+  if (srcMatch) return srcMatch[1];
+  if (input.startsWith("http")) return input.trim();
+  return input.trim();
+}
+
 export default function Calendar() {
   const { data: events = [], isLoading } = useCalendarEvents();
+  const { data: profile, isLoading: profileLoading } = useProfile();
+  const updateProfile = useUpdateProfile();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  const [embedInput, setEmbedInput] = useState("");
+  const [editingEmbed, setEditingEmbed] = useState(false);
 
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading || profileLoading) return <LoadingSpinner />;
+
+  const embedUrl = profile?.googleCalendarEmbedUrl;
+
+  const handleSaveEmbed = () => {
+    const url = extractEmbedSrc(embedInput);
+    if (!url) return;
+    updateProfile.mutate({ googleCalendarEmbedUrl: url }, {
+      onSuccess: () => {
+        setEditingEmbed(false);
+        setEmbedInput("");
+      },
+    });
+  };
+
+  const handleRemoveEmbed = () => {
+    updateProfile.mutate({ googleCalendarEmbedUrl: null }, {
+      onSuccess: () => setEditingEmbed(false),
+    });
+  };
 
   // Build course color map
   const courseIds = [...new Set(events.map(e => e.courseId))];
@@ -60,7 +91,6 @@ export default function Calendar() {
 
   const selectedEvents = selectedDay ? getEventsForDay(selectedDay) : [];
 
-  // Upcoming events (next 30 days)
   const today = new Date();
   const upcoming = events
     .filter(e => new Date(e.dueDate) >= today)
@@ -84,16 +114,6 @@ export default function Calendar() {
             <Download className="w-4 h-4 mr-2" />
             Export .ics
           </Button>
-          <a
-            href="https://calendar.google.com/calendar/r/settings/addbyurl"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Button variant="primary" data-testid="button-open-google-calendar">
-              <CalIcon className="w-4 h-4 mr-2" />
-              Open Google Calendar
-            </Button>
-          </a>
         </div>
       </div>
 
@@ -228,6 +248,103 @@ export default function Calendar() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Google Calendar Embed Section */}
+      <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between p-5 border-b border-border">
+          <div className="flex items-center gap-3">
+            <CalIcon className="w-5 h-5 text-primary" />
+            <h3 className="font-display font-bold text-lg text-foreground">Google Calendar</h3>
+          </div>
+          {embedUrl && !editingEmbed && (
+            <button
+              onClick={() => { setEditingEmbed(true); setEmbedInput(embedUrl); }}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="button-edit-embed"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              Change
+            </button>
+          )}
+        </div>
+
+        {embedUrl && !editingEmbed ? (
+          <div className="w-full" style={{ height: 600 }}>
+            <iframe
+              src={embedUrl}
+              className="w-full h-full border-0"
+              title="Google Calendar"
+              data-testid="google-calendar-iframe"
+            />
+          </div>
+        ) : (
+          <div className="p-6 space-y-5">
+            {/* How-to guide */}
+            <div className="bg-primary/5 border border-primary/15 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+                <Info className="w-4 h-4 shrink-0" />
+                How to find your Google Calendar Embed URL
+              </div>
+              <ol className="space-y-2 text-sm text-muted-foreground list-none">
+                {[
+                  <>Open <a href="https://calendar.google.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">calendar.google.com</a> and click the <strong className="text-foreground">gear icon</strong> (top-right) → <strong className="text-foreground">Settings</strong>.</>,
+                  <>In the left panel under <strong className="text-foreground">"Settings for my calendars"</strong>, click the calendar you want to embed (usually your name).</>,
+                  <>Scroll down to the <strong className="text-foreground">"Integrate calendar"</strong> section.</>,
+                  <>Find the <strong className="text-foreground">"Embed code"</strong> box — it contains a full <code className="bg-secondary px-1 py-0.5 rounded text-xs">&lt;iframe&gt;</code> tag.</>,
+                  <>Copy the entire embed code (or just the URL inside <code className="bg-secondary px-1 py-0.5 rounded text-xs">src="..."</code>) and paste it below.</>,
+                ].map((step, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary font-bold text-xs flex items-center justify-center mt-0.5">
+                      {i + 1}
+                    </span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            {/* Input */}
+            <div className="space-y-3">
+              <label className="text-sm font-semibold text-foreground">Paste your embed code or src URL</label>
+              <textarea
+                className="w-full h-24 rounded-xl border border-border bg-secondary/40 px-4 py-3 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                placeholder={`<iframe src="https://calendar.google.com/calendar/embed?src=..." ...></iframe>\n\nor just the URL:\n\nhttps://calendar.google.com/calendar/embed?src=...`}
+                value={embedInput}
+                onChange={e => setEmbedInput(e.target.value)}
+                data-testid="input-embed-code"
+              />
+              <div className="flex gap-3">
+                <Button
+                  variant="primary"
+                  onClick={handleSaveEmbed}
+                  disabled={!embedInput.trim() || updateProfile.isPending}
+                  data-testid="button-save-embed"
+                >
+                  <Check className="w-4 h-4 mr-2" />
+                  {updateProfile.isPending ? "Saving..." : "Embed Calendar"}
+                </Button>
+                {editingEmbed && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => { setEditingEmbed(false); setEmbedInput(""); }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleRemoveEmbed}
+                      className="text-destructive border-destructive/30 hover:bg-destructive/5"
+                    >
+                      Remove
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

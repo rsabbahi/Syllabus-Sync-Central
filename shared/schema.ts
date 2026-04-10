@@ -18,6 +18,7 @@ export const users = pgTable("users", {
   profileImageUrl: varchar("profile_image_url"),
   university: varchar("university"),
   bio: text("bio"),
+  googleCalendarEmbedUrl: text("google_calendar_embed_url"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -106,6 +107,7 @@ export const updateUserProfileSchema = z.object({
   university: z.string().optional(),
   bio: z.string().optional(),
   profileImageUrl: z.string().optional(),
+  googleCalendarEmbedUrl: z.string().optional().nullable(),
 });
 export type UpdateUserProfile = z.infer<typeof updateUserProfileSchema>;
 
