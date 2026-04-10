@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { eq, inArray } from "drizzle-orm";
-import { assignments, tasks, userGrades } from "@shared/schema";
+import { assignments, tasks, userGrades, updateUserProfileSchema } from "@shared/schema";
 import { isAuthenticated, setupAuth } from "./replit_integrations/auth";
 import multer from "multer";
 import { createRequire } from "module";
@@ -37,6 +37,9 @@ export async function registerRoutes(
   app.use('/api/assignments', isAuthenticated);
   app.use('/api/grades', isAuthenticated);
   app.use('/api/tasks', isAuthenticated);
+  app.use('/api/profile', isAuthenticated);
+  app.use('/api/calendar', isAuthenticated);
+  app.use('/api/syllabi', isAuthenticated);
 
   app.get(api.courses.list.path, async (req: any, res) => {
     const userId = req.user.claims.sub;
@@ -197,6 +200,104 @@ export async function registerRoutes(
       const id = Number(req.params.id);
       await storage.deleteTask(id);
       res.status(204).send();
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // === PROFILE ROUTES ===
+  app.get(api.profile.get.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      res.json(user);
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.put(api.profile.update.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const parsed = updateUserProfileSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: "Invalid data" });
+      const updated = await storage.updateUserProfile(userId, parsed.data);
+      res.json(updated);
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Avatar upload: base64 data URL stored directly
+  app.post(api.profile.uploadAvatar.path, upload.single("avatar"), async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+      const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+      const updated = await storage.updateUserProfile(userId, { profileImageUrl: base64 });
+      res.json({ url: updated.profileImageUrl });
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // === CALENDAR ROUTES ===
+  app.get(api.calendar.events.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const enrolledCourses = await storage.getEnrolledCourses(userId);
+      const events = [];
+      for (const course of enrolledCourses) {
+        const courseAssignments = await storage.getAssignmentsByCourse(course.id);
+        for (const assignment of courseAssignments) {
+          events.push({
+            id: assignment.id,
+            title: assignment.name,
+            type: assignment.type,
+            dueDate: assignment.dueDate,
+            courseId: course.id,
+            courseName: course.name,
+            courseCode: course.code,
+            weight: assignment.weight,
+          });
+        }
+      }
+      res.json(events);
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get(api.calendar.ical.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const enrolledCourses = await storage.getEnrolledCourses(userId);
+      const lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//SyllabusSync//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+      ];
+      for (const course of enrolledCourses) {
+        const courseAssignments = await storage.getAssignmentsByCourse(course.id);
+        for (const a of courseAssignments) {
+          const dt = new Date(a.dueDate);
+          const dtStr = dt.toISOString().replace(/[-:]/g, "").replace(".000", "");
+          lines.push("BEGIN:VEVENT");
+          lines.push(`UID:syllabus-${a.id}@syllabussync`);
+          lines.push(`DTSTART:${dtStr}`);
+          lines.push(`DTEND:${dtStr}`);
+          lines.push(`SUMMARY:${a.name} - ${course.code}`);
+          lines.push(`DESCRIPTION:${a.type} for ${course.name} | Weight: ${a.weight}%`);
+          lines.push("END:VEVENT");
+        }
+      }
+      lines.push("END:VCALENDAR");
+      res.setHeader("Content-Type", "text/calendar");
+      res.setHeader("Content-Disposition", 'attachment; filename="syllabussync.ics"');
+      res.send(lines.join("\r\n"));
     } catch (err) {
       res.status(500).json({ message: "Internal server error" });
     }

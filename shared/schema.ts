@@ -16,6 +16,8 @@ export const users = pgTable("users", {
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
+  university: varchar("university"),
+  bio: text("bio"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -98,6 +100,15 @@ export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true, userI
 export const updateTaskSchema = insertTaskSchema.partial();
 
 // --- Types ---
+export const updateUserProfileSchema = z.object({
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+  university: z.string().optional(),
+  bio: z.string().optional(),
+  profileImageUrl: z.string().optional(),
+});
+export type UpdateUserProfile = z.infer<typeof updateUserProfileSchema>;
+
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type Course = typeof courses.$inferSelect;

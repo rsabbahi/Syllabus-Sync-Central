@@ -12,6 +12,8 @@ import Dashboard from "@/pages/dashboard";
 import Courses from "@/pages/courses";
 import CourseDetails from "@/pages/course-details";
 import GradeTracker from "@/pages/grade-tracker";
+import Profile from "@/pages/profile";
+import Calendar from "@/pages/calendar";
 import Login from "@/pages/login";
 import NotFound from "@/pages/not-found";
 
@@ -61,6 +63,14 @@ function Router() {
       
       <Route path="/tracker">
         <ProtectedRoute component={GradeTracker} />
+      </Route>
+
+      <Route path="/calendar">
+        <ProtectedRoute component={Calendar} />
+      </Route>
+
+      <Route path="/profile">
+        <ProtectedRoute component={Profile} />
       </Route>
 
       <Route component={NotFound} />

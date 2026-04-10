@@ -21,12 +21,17 @@ import {
   type InsertUserGrade,
   type InsertAssignment,
   type UpdateAssignment,
+  type UpdateUserProfile,
   type CourseResponse,
   type CourseGradeTrackerResponse,
   type GradeTrackerItem
 } from "@shared/schema";
 
 export interface IStorage {
+  // Profile
+  getUser(id: string): Promise<User | undefined>;
+  updateUserProfile(id: string, updates: UpdateUserProfile): Promise<User>;
+
   // Course
   getCourses(): Promise<Course[]>;
   getCourse(id: number): Promise<Course | undefined>;
@@ -62,6 +67,19 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  async getUser(id: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async updateUserProfile(id: string, updates: UpdateUserProfile): Promise<User> {
+    const [updated] = await db.update(users)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return updated;
+  }
+
   async getCourses(): Promise<Course[]> {
     return await db.select().from(courses);
   }

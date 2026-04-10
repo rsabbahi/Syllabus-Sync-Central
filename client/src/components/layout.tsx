@@ -8,7 +8,8 @@ import {
   LogOut, 
   User as UserIcon,
   Menu,
-  GraduationCap
+  GraduationCap,
+  LayoutDashboard,
 } from "lucide-react";
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -16,8 +17,9 @@ export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
 
   const navItems = [
-    { href: "/", label: "Dashboard", icon: Calendar },
+    { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/courses", label: "Courses", icon: BookOpen },
+    { href: "/calendar", label: "Calendar", icon: Calendar },
     { href: "/tracker", label: "Grade Tracker", icon: Target },
   ];
 
@@ -54,12 +56,20 @@ export function Layout({ children }: { children: ReactNode }) {
           })}
         </nav>
 
-        <div className="p-4 border-t border-border">
+        <div className="p-4 border-t border-border space-y-2">
+          <Link href="/profile">
+            <div className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium cursor-pointer ${location === "/profile" ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>
+              <UserIcon className="w-5 h-5" />
+              Profile
+            </div>
+          </Link>
           <div className="flex items-center justify-between px-4 py-3 bg-secondary rounded-xl">
             <div className="flex items-center gap-3 overflow-hidden">
-              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-                {user?.profileImageUrl ? (
-                  <img src={user.profileImageUrl} alt="Avatar" className="w-full h-full rounded-full object-cover" />
+              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center shrink-0 overflow-hidden">
+                {user?.profileImageUrl && !user.profileImageUrl.startsWith("emoji:") ? (
+                  <img src={user.profileImageUrl} alt="Avatar" className="w-full h-full object-cover" />
+                ) : user?.profileImageUrl?.startsWith("emoji:") ? (
+                  <span className="text-base">{user.profileImageUrl.replace("emoji:", "")}</span>
                 ) : (
                   <UserIcon className="w-4 h-4 text-primary" />
                 )}

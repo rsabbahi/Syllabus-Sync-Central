@@ -136,6 +136,35 @@ export const api = {
       }
     }
   },
+  profile: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/profile' as const,
+      responses: { 200: z.custom<any>() }
+    },
+    update: {
+      method: 'PUT' as const,
+      path: '/api/profile' as const,
+      responses: { 200: z.custom<any>() }
+    },
+    uploadAvatar: {
+      method: 'POST' as const,
+      path: '/api/profile/avatar' as const,
+      responses: { 200: z.object({ url: z.string() }) }
+    }
+  },
+  calendar: {
+    events: {
+      method: 'GET' as const,
+      path: '/api/calendar/events' as const,
+      responses: { 200: z.array(z.custom<any>()) }
+    },
+    ical: {
+      method: 'GET' as const,
+      path: '/api/calendar/ical' as const,
+      responses: { 200: z.string() }
+    }
+  },
   syllabi: {
     upload: {
       method: 'POST' as const,
