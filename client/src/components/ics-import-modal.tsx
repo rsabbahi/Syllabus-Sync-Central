@@ -85,7 +85,7 @@ export function IcsImportModal({ open, onOpenChange, onSuccess }: Props) {
         setStep("done");
         toast({
           title: "Calendar imported",
-          description: `${imported} event${imported !== 1 ? "s" : ""} added as tasks${skipped > 0 ? `, ${skipped} already existed` : ""}.`,
+          description: `${imported} event${imported !== 1 ? "s" : ""} added to your calendar${skipped > 0 ? `, ${skipped} already existed` : ""}.`,
         });
         const firstDate = toImport[0]?.startDate ? new Date(toImport[0].startDate) : undefined;
         onSuccess?.(firstDate);
@@ -258,7 +258,7 @@ export function IcsImportModal({ open, onOpenChange, onSuccess }: Props) {
         {step === "importing" && (
           <div className="py-8 flex flex-col items-center gap-3 text-muted-foreground">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            <p className="text-sm">Importing events as tasks…</p>
+            <p className="text-sm">Importing events to your calendar…</p>
           </div>
         )}
 
