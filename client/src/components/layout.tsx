@@ -1,15 +1,16 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
-import { 
-  BookOpen, 
-  Calendar, 
-  Target, 
-  LogOut, 
+import {
+  BookOpen,
+  Calendar,
+  Target,
+  LogOut,
   User as UserIcon,
   Menu,
   GraduationCap,
   LayoutDashboard,
+  CalendarDays,
 } from "lucide-react";
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -57,6 +58,12 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="p-4 border-t border-border space-y-2">
+          <Link href="/calendar?tab=my-calendar">
+            <div className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium cursor-pointer ${location === "/calendar" && typeof window !== "undefined" && window.location.search.includes("tab=my-calendar") ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>
+              <CalendarDays className="w-5 h-5" />
+              My Calendar
+            </div>
+          </Link>
           <Link href="/profile">
             <div className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium cursor-pointer ${location === "/profile" ? "bg-primary text-primary-foreground shadow-md shadow-primary/20" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>
               <UserIcon className="w-5 h-5" />

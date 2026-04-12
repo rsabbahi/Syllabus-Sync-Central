@@ -400,10 +400,15 @@ export class DatabaseStorage implements IStorage {
   // ── Calendar Imported Events ─────────────────────────────────────────────
 
   async getImportedExternalIds(userId: string): Promise<string[]> {
-    const rows = await db.select({ externalId: calendarImportedEvents.externalId })
-      .from(calendarImportedEvents)
-      .where(eq(calendarImportedEvents.userId, userId));
-    return rows.map(r => r.externalId);
+    try {
+      const rows = await db.select({ externalId: calendarImportedEvents.externalId })
+        .from(calendarImportedEvents)
+        .where(eq(calendarImportedEvents.userId, userId));
+      return rows.map(r => r.externalId);
+    } catch {
+      // Table may not exist if db:push hasn't been run yet
+      return [];
+    }
   }
 
   async importEventsAsTasks(
@@ -411,7 +416,14 @@ export class DatabaseStorage implements IStorage {
     connectionId: number | null,
     events: NormalizedEvent[]
   ): Promise<{ imported: number; skipped: number }> {
-    const existingIds = new Set(await this.getImportedExternalIds(userId));
+    // Graceful fallback if calendar_imported_events table doesn't exist yet
+    let existingIds: Set<string>;
+    try {
+      existingIds = new Set(await this.getImportedExternalIds(userId));
+    } catch {
+      existingIds = new Set();
+    }
+
     let imported = 0;
     let skipped = 0;
 
@@ -429,12 +441,16 @@ export class DatabaseStorage implements IStorage {
         assignmentId: null,
       });
 
-      await db.insert(calendarImportedEvents).values({
-        userId,
-        connectionId,
-        externalId: event.externalId,
-        taskId: task.id,
-      });
+      try {
+        await db.insert(calendarImportedEvents).values({
+          userId,
+          connectionId,
+          externalId: event.externalId,
+          taskId: task.id,
+        });
+      } catch {
+        // table missing — task was still created, skip tracking row
+      }
 
       existingIds.add(event.externalId);
       imported++;

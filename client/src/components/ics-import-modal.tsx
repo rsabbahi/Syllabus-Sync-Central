@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/button";
 import { format } from "date-fns";
-import { Upload, FileText, Check, AlertCircle, Loader2 } from "lucide-react";
+import { Upload, FileText, Check, AlertCircle, Loader2, X } from "lucide-react";
 import {
   useUploadIcs,
   useConfirmIcsImport,
@@ -11,17 +11,19 @@ import {
 } from "@/hooks/use-calendar-connections";
 import { useToast } from "@/hooks/use-toast";
 
-type Step = "idle" | "parsing" | "preview" | "importing" | "done";
+type Step = "idle" | "file-selected" | "parsing" | "preview" | "importing" | "done";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSuccess?: () => void;
 }
 
-export function IcsImportModal({ open, onOpenChange }: Props) {
+export function IcsImportModal({ open, onOpenChange, onSuccess }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>("idle");
   const [fileName, setFileName] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [events, setEvents] = useState<ParsedCalendarEvent[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -38,8 +40,16 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
       return;
     }
     setFileName(file.name);
+    setSelectedFile(file);
+    setStep("file-selected");
+    // Reset input so same file can be re-selected later
+    e.target.value = "";
+  }
+
+  function handleUpload() {
+    if (!selectedFile) return;
     setStep("parsing");
-    uploadIcs.mutate(file, {
+    uploadIcs.mutate(selectedFile, {
       onSuccess: ({ events: parsed }) => {
         setEvents(parsed);
         // Pre-select non-duplicates
@@ -48,12 +58,10 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
         setStep("preview");
       },
       onError: (err: any) => {
-        toast({ title: "Parse failed", description: err.message, variant: "destructive" });
-        setStep("idle");
+        toast({ title: "Parse failed", description: err.message ?? "Could not parse file.", variant: "destructive" });
+        setStep("file-selected");
       },
     });
-    // Reset input so same file can be re-selected
-    e.target.value = "";
   }
 
   function toggleEvent(id: string) {
@@ -79,6 +87,7 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
           title: "Calendar imported",
           description: `${imported} event${imported !== 1 ? "s" : ""} added as tasks${skipped > 0 ? `, ${skipped} already existed` : ""}.`,
         });
+        onSuccess?.();
         setTimeout(() => {
           onOpenChange(false);
           reset();
@@ -94,6 +103,7 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
   function reset() {
     setStep("idle");
     setFileName("");
+    setSelectedFile(null);
     setEvents([]);
     setSelected(new Set());
   }
@@ -122,6 +132,42 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
               <span className="text-sm font-semibold">Click to choose file</span>
               <span className="text-xs">.ics, .ical, or .zip accepted</span>
             </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".ics,.ical,.zip"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+          </div>
+        )}
+
+        {/* ── Step: file selected — show name + upload button ── */}
+        {step === "file-selected" && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-secondary/30">
+              <FileText className="w-5 h-5 text-primary shrink-0" />
+              <span className="text-sm font-semibold text-foreground truncate flex-1">{fileName}</span>
+              <button
+                onClick={reset}
+                className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                title="Remove file"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Click <strong>Preview Events</strong> to see what's in this file before importing.
+            </p>
+            <div className="flex gap-3">
+              <Button variant="outline" onClick={() => { reset(); setTimeout(() => fileInputRef.current?.click(), 50); }}>
+                Choose different file
+              </Button>
+              <Button variant="primary" onClick={handleUpload}>
+                <Upload className="w-4 h-4 mr-2" />
+                Preview Events
+              </Button>
+            </div>
             <input
               ref={fileInputRef}
               type="file"
@@ -192,7 +238,7 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
             )}
 
             <div className="flex gap-3 pt-1">
-              <Button variant="outline" onClick={() => { reset(); fileInputRef.current?.click(); }}>
+              <Button variant="outline" onClick={() => { reset(); setTimeout(() => fileInputRef.current?.click(), 50); }}>
                 Choose different file
               </Button>
               <Button
