@@ -23,6 +23,8 @@ import {
   type AssignmentResources,
   type CalendarConnection,
   type CalendarImportedEvent,
+  type InsertCalendarEventInput,
+  type UpdateCalendarEvent,
   type InsertCalendarConnection,
   type InsertCourse,
   type InsertTask,
@@ -105,6 +107,9 @@ export interface IStorage {
   importCalendarEvents(userId: string, connectionId: number | null, events: NormalizedEvent[]): Promise<{ imported: number; skipped: number }>;
   deleteImportedEventsByConnection(connectionId: number): Promise<void>;
   cleanupOldCalendarTasks(userId: string): Promise<void>;
+  createCalendarEvent(userId: string, data: InsertCalendarEventInput): Promise<CalendarImportedEvent>;
+  updateCalendarEvent(userId: string, id: number, data: UpdateCalendarEvent): Promise<CalendarImportedEvent | null>;
+  deleteCalendarEvent(userId: string, id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -514,6 +519,51 @@ export class DatabaseStorage implements IStorage {
     } catch {
       // graceful failure
     }
+  }
+
+  async createCalendarEvent(userId: string, data: InsertCalendarEventInput): Promise<CalendarImportedEvent> {
+    const uid = `manual-${userId}-${Date.now()}`;
+    const [row] = await db.insert(calendarImportedEvents).values({
+      userId,
+      connectionId: null,
+      externalId: uid,
+      title: data.title,
+      startDate: data.startDate,
+      endDate: data.endDate ?? null,
+      description: data.description ?? null,
+      location: data.location ?? null,
+      color: data.color ?? null,
+      eventType: data.eventType ?? 'other',
+    }).returning();
+    return row;
+  }
+
+  async updateCalendarEvent(userId: string, id: number, data: UpdateCalendarEvent): Promise<CalendarImportedEvent | null> {
+    const patch: Record<string, any> = {};
+    if (data.title !== undefined) patch.title = data.title;
+    if (data.startDate !== undefined) patch.startDate = data.startDate;
+    if ('endDate' in data) patch.endDate = data.endDate ?? null;
+    if ('description' in data) patch.description = data.description ?? null;
+    if ('location' in data) patch.location = data.location ?? null;
+    if ('color' in data) patch.color = data.color ?? null;
+    if (data.eventType !== undefined) patch.eventType = data.eventType;
+
+    if (Object.keys(patch).length === 0) {
+      const [existing] = await db.select().from(calendarImportedEvents)
+        .where(and(eq(calendarImportedEvents.id, id), eq(calendarImportedEvents.userId, userId)));
+      return existing ?? null;
+    }
+
+    const [updated] = await db.update(calendarImportedEvents)
+      .set(patch)
+      .where(and(eq(calendarImportedEvents.id, id), eq(calendarImportedEvents.userId, userId)))
+      .returning();
+    return updated ?? null;
+  }
+
+  async deleteCalendarEvent(userId: string, id: number): Promise<void> {
+    await db.delete(calendarImportedEvents)
+      .where(and(eq(calendarImportedEvents.id, id), eq(calendarImportedEvents.userId, userId)));
   }
 
   async generateTasksForAssignment(userId: string, assignment: Assignment): Promise<void> {

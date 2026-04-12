@@ -34,7 +34,19 @@ export interface ImportedCalendarEvent {
   endDate: string | null;
   description: string | null;
   location: string | null;
+  color: string | null;
+  eventType: string | null;
   importedAt: string | null;
+}
+
+export interface CalendarEventInput {
+  title: string;
+  startDate: string;
+  endDate?: string | null;
+  description?: string | null;
+  location?: string | null;
+  color?: string | null;
+  eventType?: "class" | "exam" | "life" | "other";
 }
 
 // ── Connections (kept for possible future use) ────────────────────────────
@@ -121,10 +133,43 @@ export function useConfirmIcsImport() {
     mutationFn: (events: ParsedCalendarEvent[]): Promise<{ imported: number; skipped: number }> =>
       apiRequest("POST", api.calendar.ics.confirm.path, { events }).then(r => r.json()),
     onSuccess: () => {
-      // Refresh the imported events list so the calendar grid updates immediately
       qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
-      // Also refresh tasks in case there are any old ones being cleaned up
       qc.invalidateQueries({ queryKey: [api.tasks.list.path] });
+    },
+  });
+}
+
+// ── Calendar event CRUD ───────────────────────────────────────────────────
+
+export function useCreateCalendarEvent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CalendarEventInput): Promise<ImportedCalendarEvent> =>
+      apiRequest("POST", "/api/calendar/events", data).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
+    },
+  });
+}
+
+export function useUpdateCalendarEvent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: CalendarEventInput & { id: number }): Promise<ImportedCalendarEvent> =>
+      apiRequest("PATCH", `/api/calendar/events/${id}`, data).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
+    },
+  });
+}
+
+export function useDeleteCalendarEventById() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) =>
+      apiRequest("DELETE", `/api/calendar/events/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
     },
   });
 }

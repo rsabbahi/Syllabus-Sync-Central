@@ -4,6 +4,7 @@ import { useProfile, useUpdateProfile } from "@/hooks/use-profile";
 import { useTasks } from "@/hooks/use-tasks";
 import { useImportedCalendarEvents, type ImportedCalendarEvent } from "@/hooks/use-calendar-connections";
 import { IcsImportModal } from "@/components/ics-import-modal";
+import { CalendarEventModal } from "@/components/calendar-event-modal";
 import { LoadingSpinner } from "@/components/loading";
 import { Button } from "@/components/button";
 import {
@@ -12,7 +13,7 @@ import {
 } from "date-fns";
 import {
   ChevronLeft, ChevronRight, Download, ExternalLink,
-  Calendar as CalIcon, Info, Check, X, Upload, Link, CheckCircle2,
+  Calendar as CalIcon, Info, Check, X, Upload, Link, CheckCircle2, Plus, Pencil,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -57,6 +58,9 @@ interface UnifiedEvent {
   weight?: string;
   location?: string;
   description?: string;
+  customColor?: string;  // hex color set by user on imported events
+  eventType?: string;    // class | exam | life | other
+  rawImported?: ImportedCalendarEvent; // original row for editing
 }
 
 // ── Embed URL helpers ─────────────────────────────────────────────────────────
@@ -140,6 +144,9 @@ export default function Calendar() {
   const [activeTab, setActiveTab] = useState<"academic" | "my-calendar">("academic");
   const [icsModalOpen, setIcsModalOpen] = useState(false);
   const [showEmbedWizard, setShowEmbedWizard] = useState(false);
+  const [eventModalOpen, setEventModalOpen] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<ImportedCalendarEvent | null>(null);
+  const [addEventDate, setAddEventDate] = useState<Date | undefined>(undefined);
   const [selectedType, setSelectedType] = useState<CalType>("google");
   const [embedInput, setEmbedInput] = useState("");
   const [icsConnected, setIcsConnected] = useState(
@@ -214,18 +221,26 @@ export default function Calendar() {
       id: e.id,
       source: "imported" as EventSource,
       title: String(e.title),
-      type: "event",
+      type: e.eventType ?? "event",
       date: new Date(e.startDate!),
       location: e.location ?? undefined,
       description: e.description ?? undefined,
+      customColor: e.color ?? undefined,
+      eventType: e.eventType ?? undefined,
+      rawImported: e,
     }));
 
   const allEvents: UnifiedEvent[] = [...fromAssignments, ...fromTasks, ...fromImported];
 
   function colorFor(e: UnifiedEvent): string {
-    if (e.source === "imported") return IMPORTED_COLOR;
+    if (e.source === "imported") return e.customColor ? "" : IMPORTED_COLOR;
     if (e.source === "task") return TASK_COLOR;
     return courseColorMap[e.courseId!] ?? COURSE_COLORS[0];
+  }
+
+  function colorStyle(e: UnifiedEvent): React.CSSProperties {
+    if (e.source === "imported" && e.customColor) return { backgroundColor: e.customColor };
+    return {};
   }
 
   // ── Calendar grid ─────────────────────────────────────────────────────────
@@ -280,6 +295,18 @@ export default function Calendar() {
       setMyCalDate(firstEventDate);
     }
     setActiveTab("my-calendar");
+  }
+
+  function openEditModal(event: ImportedCalendarEvent) {
+    setEditingEvent(event);
+    setAddEventDate(undefined);
+    setEventModalOpen(true);
+  }
+
+  function openAddModal(date?: Date) {
+    setEditingEvent(null);
+    setAddEventDate(date);
+    setEventModalOpen(true);
   }
 
   const inst = INSTRUCTIONS[selectedType];
@@ -362,7 +389,12 @@ export default function Calendar() {
                       </span>
                       <div className="space-y-0.5">
                         {dayEvents.slice(0, 2).map(evt => (
-                          <div key={evt.key} className={`text-[10px] font-semibold text-white rounded px-1 py-0.5 truncate ${colorFor(evt)}`}>
+                          <div
+                            key={evt.key}
+                            onClick={e => { if (evt.source === "imported" && evt.rawImported) { e.stopPropagation(); openEditModal(evt.rawImported); } }}
+                            className={`text-[10px] font-semibold text-white rounded px-1 py-0.5 truncate ${colorFor(evt)} ${evt.source === "imported" ? "cursor-pointer hover:opacity-80" : ""}`}
+                            style={colorStyle(evt)}
+                          >
                             {evt.title}
                           </div>
                         ))}
@@ -488,6 +520,16 @@ export default function Calendar() {
                 </div>
               )}
 
+              {/* Add event button */}
+              {!showEmbedWizard && (
+                <div className="flex justify-end">
+                  <Button variant="primary" onClick={() => openAddModal(myCalSelectedDay ?? new Date())}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Event
+                  </Button>
+                </div>
+              )}
+
               {/* Imported events mini calendar */}
               {fromImported.length > 0 && !showEmbedWizard && (() => {
                 const myCalStart = startOfWeek(startOfMonth(myCalDate));
@@ -543,7 +585,12 @@ export default function Calendar() {
                             </span>
                             <div className="space-y-0.5">
                               {dayEvts.slice(0, 2).map(evt => (
-                                <div key={evt.key} className={`text-[9px] font-semibold text-white rounded px-1 py-px truncate ${IMPORTED_COLOR}`}>
+                                <div
+                                  key={evt.key}
+                                  onClick={e => { if (evt.rawImported) { e.stopPropagation(); openEditModal(evt.rawImported); } }}
+                                  className={`text-[9px] font-semibold text-white rounded px-1 py-px truncate cursor-pointer hover:opacity-80 ${evt.customColor ? "" : IMPORTED_COLOR}`}
+                                  style={evt.customColor ? { backgroundColor: evt.customColor } : {}}
+                                >
                                   {evt.title}
                                 </div>
                               ))}
@@ -558,17 +605,39 @@ export default function Calendar() {
                     {/* Selected day detail */}
                     {myCalSelectedDay && myCalSelectedEvents.length > 0 && (
                       <div className="border-t border-border p-4 bg-secondary/10 space-y-2">
-                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{format(myCalSelectedDay, "MMMM d, yyyy")}</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{format(myCalSelectedDay, "MMMM d, yyyy")}</p>
+                          <button
+                            onClick={() => openAddModal(myCalSelectedDay)}
+                            className="flex items-center gap-1 text-xs text-primary hover:underline font-semibold"
+                          >
+                            <Plus className="w-3 h-3" /> Add
+                          </button>
+                        </div>
                         <div className="space-y-2">
                           {myCalSelectedEvents.map(evt => (
-                            <EventCard key={evt.key} event={evt} color={IMPORTED_COLOR} />
+                            <EventCard
+                              key={evt.key}
+                              event={evt}
+                              color={colorFor(evt)}
+                              colorStyle={colorStyle(evt)}
+                              onEdit={evt.rawImported ? () => openEditModal(evt.rawImported!) : undefined}
+                            />
                           ))}
                         </div>
                       </div>
                     )}
                     {myCalSelectedDay && myCalSelectedEvents.length === 0 && (
                       <div className="border-t border-border p-4 bg-secondary/10">
-                        <p className="text-xs text-muted-foreground">{format(myCalSelectedDay, "MMMM d")} — no imported events.</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-muted-foreground">{format(myCalSelectedDay, "MMMM d")} — no events.</p>
+                          <button
+                            onClick={() => openAddModal(myCalSelectedDay)}
+                            className="flex items-center gap-1 text-xs text-primary hover:underline font-semibold"
+                          >
+                            <Plus className="w-3 h-3" /> Add
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -629,7 +698,13 @@ export default function Calendar() {
               ) : (
                 <div className="space-y-3">
                   {selectedEvents.map(evt => (
-                    <EventCard key={evt.key} event={evt} color={colorFor(evt)} />
+                    <EventCard
+                      key={evt.key}
+                      event={evt}
+                      color={colorFor(evt)}
+                      colorStyle={colorStyle(evt)}
+                      onEdit={evt.rawImported ? () => openEditModal(evt.rawImported!) : undefined}
+                    />
                   ))}
                 </div>
               )}
@@ -644,7 +719,14 @@ export default function Calendar() {
             ) : (
               <div className="space-y-3">
                 {upcoming.map(evt => (
-                  <EventCard key={evt.key} event={evt} color={colorFor(evt)} compact />
+                  <EventCard
+                    key={evt.key}
+                    event={evt}
+                    color={colorFor(evt)}
+                    colorStyle={colorStyle(evt)}
+                    compact
+                    onEdit={evt.rawImported ? () => openEditModal(evt.rawImported!) : undefined}
+                  />
                 ))}
               </div>
             )}
@@ -653,17 +735,34 @@ export default function Calendar() {
       </div>
 
       <IcsImportModal open={icsModalOpen} onOpenChange={setIcsModalOpen} onSuccess={handleIcsImportSuccess} />
+      <CalendarEventModal
+        open={eventModalOpen}
+        onOpenChange={setEventModalOpen}
+        event={editingEvent}
+        defaultDate={addEventDate}
+      />
     </div>
   );
 }
 
 // ── Event card (shared for grid detail + upcoming list) ───────────────────────
 
-function EventCard({ event, color, compact = false }: { event: UnifiedEvent; color: string; compact?: boolean }) {
-  const badge = TYPE_BADGE[event.type] ?? "bg-gray-100 text-gray-700";
+function EventCard({
+  event,
+  color,
+  colorStyle: cs = {},
+  compact = false,
+  onEdit,
+}: {
+  event: UnifiedEvent;
+  color: string;
+  colorStyle?: React.CSSProperties;
+  compact?: boolean;
+  onEdit?: () => void;
+}) {
+  const badge = TYPE_BADGE[event.type] ?? TYPE_BADGE["event"];
   const isAssignment = event.source === "assignment";
 
-  // Build a CalendarEvent shape only for assignments (needed for Google Calendar URL)
   const calEvt = isAssignment ? {
     id: event.id,
     title: event.title,
@@ -679,16 +778,36 @@ function EventCard({ event, color, compact = false }: { event: UnifiedEvent; col
     <div className={`rounded-xl border border-border bg-background p-3 ${compact ? "space-y-1" : "space-y-2"}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${color}`} />
+          <div
+            className={`w-2.5 h-2.5 rounded-full shrink-0 ${color}`}
+            style={cs}
+          />
           <span className={`font-semibold text-foreground truncate ${compact ? "text-xs" : "text-sm"}`}>
             {event.title}
           </span>
         </div>
-        {calEvt && (
-          <a href={getGoogleCalendarUrl(calEvt)} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary transition-colors shrink-0" title="Add to Google Calendar">
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        )}
+        <div className="flex items-center gap-1 shrink-0">
+          {onEdit && (
+            <button
+              onClick={onEdit}
+              className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-primary transition-colors"
+              title="Edit event"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+          )}
+          {calEvt && (
+            <a
+              href={getGoogleCalendarUrl(calEvt)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted-foreground hover:text-primary transition-colors p-1"
+              title="Add to Google Calendar"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-2 flex-wrap">
         <span className={`text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badge}`}>{event.type}</span>

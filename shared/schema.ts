@@ -126,6 +126,8 @@ export const calendarImportedEvents = pgTable("calendar_imported_events", {
   endDate: timestamp("end_date"),
   description: text("description"),
   location: text("location"),
+  color: text("color"),       // hex color chosen by user, e.g. "#6366f1"
+  eventType: text("event_type").default("class"), // class | exam | life | other
   importedAt: timestamp("imported_at").defaultNow(),
 });
 
@@ -189,6 +191,28 @@ export type CalendarConnection = typeof calendarConnections.$inferSelect;
 export type InsertCalendarConnection = typeof calendarConnections.$inferInsert;
 export type CalendarImportedEvent = typeof calendarImportedEvents.$inferSelect;
 export type InsertCalendarImportedEvent = typeof calendarImportedEvents.$inferInsert;
+
+export const updateCalendarEventSchema = z.object({
+  title: z.string().min(1).optional(),
+  startDate: z.coerce.date().optional(),
+  endDate: z.coerce.date().nullable().optional(),
+  description: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  color: z.string().nullable().optional(),
+  eventType: z.enum(["class", "exam", "life", "other"]).optional(),
+});
+export type UpdateCalendarEvent = z.infer<typeof updateCalendarEventSchema>;
+
+export const insertCalendarEventSchema = z.object({
+  title: z.string().min(1),
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date().nullable().optional(),
+  description: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  color: z.string().nullable().optional(),
+  eventType: z.enum(["class", "exam", "life", "other"]).default("other"),
+});
+export type InsertCalendarEventInput = z.infer<typeof insertCalendarEventSchema>;
 
 export type CourseResponse = Course & {
   assignments: Assignment[];

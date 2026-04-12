@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { eq, inArray } from "drizzle-orm";
-import { assignments, tasks, userGrades, updateUserProfileSchema } from "@shared/schema";
+import { assignments, tasks, userGrades, updateUserProfileSchema, updateCalendarEventSchema, insertCalendarEventSchema } from "@shared/schema";
 import { isAuthenticated, setupAuth } from "./replit_integrations/auth";
 import multer from "multer";
 import { createRequire } from "module";
@@ -940,6 +940,53 @@ Provide 6 study resources that would help a student complete this assignment.`;
     } catch (err) {
       console.error('Microsoft sync error:', err);
       res.status(500).json({ message: "Failed to sync Microsoft Calendar" });
+    }
+  });
+
+  // ── CALENDAR EVENT CRUD ───────────────────────────────────────────────────
+
+  // Create a manual calendar event
+  app.post('/api/calendar/events', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const parsed = insertCalendarEventSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const event = await storage.createCalendarEvent(userId, parsed.data);
+      res.status(201).json(event);
+    } catch (err) {
+      console.error('Create calendar event error:', err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Update a calendar event (title, dates, color, eventType, etc.)
+  app.patch('/api/calendar/events/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const id = Number(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid event id" });
+      const parsed = updateCalendarEventSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+      const updated = await storage.updateCalendarEvent(userId, id, parsed.data);
+      if (!updated) return res.status(404).json({ message: "Event not found" });
+      res.json(updated);
+    } catch (err) {
+      console.error('Update calendar event error:', err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Delete a calendar event
+  app.delete('/api/calendar/events/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const id = Number(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid event id" });
+      await storage.deleteCalendarEvent(userId, id);
+      res.status(204).end();
+    } catch (err) {
+      console.error('Delete calendar event error:', err);
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
