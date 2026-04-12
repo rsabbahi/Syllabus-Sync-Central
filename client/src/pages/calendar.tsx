@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useEffect, useState } from "react";
 import { useCalendarEvents, downloadIcal, getGoogleCalendarUrl, CalendarEvent } from "@/hooks/use-calendar";
 import { useProfile, useUpdateProfile } from "@/hooks/use-profile";
 import { useTasks } from "@/hooks/use-tasks";
@@ -20,7 +19,7 @@ import {
 import {
   ChevronLeft, ChevronRight, Download, ExternalLink,
   Calendar as CalIcon, Info, Check, X, Upload, RefreshCw,
-  Trash2, Plus, Link,
+  Trash2, Link,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 

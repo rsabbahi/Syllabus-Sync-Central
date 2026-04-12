@@ -94,6 +94,7 @@ export interface IStorage {
   getCalendarConnection(id: number): Promise<CalendarConnection | undefined>;
   upsertCalendarConnection(data: InsertCalendarConnection): Promise<CalendarConnection>;
   updateCalendarConnectionTokens(id: number, tokens: { accessToken: string; refreshToken?: string; tokenExpiresAt: Date }): Promise<void>;
+  touchCalendarConnection(id: number): Promise<void>;
   deleteCalendarConnection(id: number): Promise<void>;
 
   // Calendar Imported Events
@@ -382,6 +383,12 @@ export class DatabaseStorage implements IStorage {
     };
     if (tokens.refreshToken) updates.refreshToken = tokens.refreshToken;
     await db.update(calendarConnections).set(updates).where(eq(calendarConnections.id, id));
+  }
+
+  async touchCalendarConnection(id: number): Promise<void> {
+    await db.update(calendarConnections)
+      .set({ lastSyncedAt: new Date(), updatedAt: new Date() })
+      .where(eq(calendarConnections.id, id));
   }
 
   async deleteCalendarConnection(id: number): Promise<void> {

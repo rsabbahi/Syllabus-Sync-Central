@@ -771,11 +771,18 @@ Provide 6 study resources that would help a student complete this assignment.`;
 
   app.get(api.calendar.google.connect.path, async (req: any, res) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_REDIRECT_URI) {
-      return res.redirect('/?error=google_not_configured');
+      return res.redirect('/calendar?error=google_not_configured');
     }
     const state = randomBytes(16).toString('hex');
     (req.session as any).calendarOAuthState = state;
-    res.redirect(getGoogleAuthUrl(state));
+    // Explicitly persist session before redirecting so state is available on callback
+    req.session.save((err: any) => {
+      if (err) {
+        console.error('Session save error (Google connect):', err);
+        return res.redirect('/calendar?error=session_error');
+      }
+      res.redirect(getGoogleAuthUrl(state));
+    });
   });
 
   app.get(api.calendar.google.callback.path, async (req: any, res) => {
@@ -831,12 +838,7 @@ Provide 6 study resources that would help a student complete this assignment.`;
 
       const events = await fetchGoogleEvents(accessToken);
       const result = await storage.importEventsAsTasks(userId, conn.id, events);
-
-      await storage.updateCalendarConnectionTokens(conn.id, {
-        accessToken: encryptToken(accessToken),
-        tokenExpiresAt: conn.tokenExpiresAt || new Date(),
-      });
-
+      await storage.touchCalendarConnection(conn.id);
       res.json(result);
     } catch (err) {
       console.error('Google sync error:', err);
@@ -852,7 +854,14 @@ Provide 6 study resources that would help a student complete this assignment.`;
     }
     const state = randomBytes(16).toString('hex');
     (req.session as any).calendarOAuthState = state;
-    res.redirect(getMicrosoftAuthUrl(state));
+    // Explicitly persist session before redirecting so state is available on callback
+    req.session.save((err: any) => {
+      if (err) {
+        console.error('Session save error (Microsoft connect):', err);
+        return res.redirect('/calendar?error=session_error');
+      }
+      res.redirect(getMicrosoftAuthUrl(state));
+    });
   });
 
   app.get(api.calendar.microsoft.callback.path, async (req: any, res) => {
@@ -907,6 +916,7 @@ Provide 6 study resources that would help a student complete this assignment.`;
 
       const events = await fetchMicrosoftEvents(accessToken);
       const result = await storage.importEventsAsTasks(userId, conn.id, events);
+      await storage.touchCalendarConnection(conn.id);
       res.json(result);
     } catch (err) {
       console.error('Microsoft sync error:', err);
@@ -927,10 +937,10 @@ Provide 6 study resources that would help a student complete this assignment.`;
       try {
         if (filename.endsWith('.zip')) {
           events = parseZipBuffer(req.file.buffer);
-        } else if (filename.endsWith('.ics')) {
+        } else if (filename.endsWith('.ics') || filename.endsWith('.ical')) {
           events = parseIcsBuffer(req.file.buffer);
         } else {
-          return res.status(400).json({ message: "File must be .ics or .zip" });
+          return res.status(400).json({ message: "File must be .ics, .ical, or .zip" });
         }
       } catch (e: any) {
         return res.status(422).json({ message: e.message || "Failed to parse calendar file" });

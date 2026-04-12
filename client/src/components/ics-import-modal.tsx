@@ -33,8 +33,8 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
     const file = e.target.files?.[0];
     if (!file) return;
     const ext = file.name.toLowerCase();
-    if (!ext.endsWith(".ics") && !ext.endsWith(".zip")) {
-      toast({ title: "Invalid file", description: "Please select a .ics or .zip file.", variant: "destructive" });
+    if (!ext.endsWith(".ics") && !ext.endsWith(".ical") && !ext.endsWith(".zip")) {
+      toast({ title: "Invalid file", description: "Please select a .ics, .ical, or .zip file.", variant: "destructive" });
       return;
     }
     setFileName(file.name);
@@ -120,12 +120,12 @@ export function IcsImportModal({ open, onOpenChange }: Props) {
             >
               <Upload className="w-8 h-8" />
               <span className="text-sm font-semibold">Click to choose file</span>
-              <span className="text-xs">.ics or .zip accepted</span>
+              <span className="text-xs">.ics, .ical, or .zip accepted</span>
             </button>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".ics,.zip"
+              accept=".ics,.ical,.zip"
               className="hidden"
               onChange={handleFileChange}
             />
