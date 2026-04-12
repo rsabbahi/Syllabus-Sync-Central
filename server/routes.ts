@@ -34,10 +34,16 @@ const execAsync = promisify(exec);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    _openai = new OpenAI({
+      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
+      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+    });
+  }
+  return _openai;
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -479,7 +485,7 @@ RULES (NON-NEGOTIABLE):
         // Run GPT-4o and Mistral in parallel for multi-model extraction
         const [gptRes, mistralRes] = await Promise.all([
           // GPT-4o extraction
-          openai.chat.completions.create({
+          getOpenAI().chat.completions.create({
             model: "gpt-4o",
             messages: [{ role: "user", content: prompt }],
             response_format: { type: "json_object" }
@@ -665,7 +671,7 @@ Respond ONLY with valid JSON matching this exact schema:
 
       const userPrompt = `Course syllabus content:\n\n${rawText.slice(0, 6000)}`;
 
-      const completion = await openai.chat.completions.create({
+      const completion = await getOpenAI().chat.completions.create({
         model: "gpt-4o",
         messages: [
           { role: "system", content: systemPrompt },
@@ -726,7 +732,7 @@ Make the search queries specific to the assignment topic. URL-encode the query i
       const userPrompt = `Assignment: "${assignment.name}" (type: ${assignment.type})
 Provide 6 study resources that would help a student complete this assignment.`;
 
-      const completion = await openai.chat.completions.create({
+      const completion = await getOpenAI().chat.completions.create({
         model: "gpt-4o",
         messages: [
           { role: "system", content: systemPrompt },
