@@ -134,7 +134,9 @@ export default function Calendar() {
   const { toast } = useToast();
 
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [myCalDate, setMyCalDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  const [myCalSelectedDay, setMyCalSelectedDay] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<"academic" | "my-calendar">("academic");
   const [icsModalOpen, setIcsModalOpen] = useState(false);
   const [showEmbedWizard, setShowEmbedWizard] = useState(false);
@@ -275,9 +277,9 @@ export default function Calendar() {
     setIcsConnected(true);
     setIcsModalOpen(false);
     if (firstEventDate && !isNaN(firstEventDate.getTime())) {
-      setCurrentDate(firstEventDate);
-      setActiveTab("academic");
+      setMyCalDate(firstEventDate);
     }
+    setActiveTab("my-calendar");
   }
 
   const inst = INSTRUCTIONS[selectedType];
@@ -379,81 +381,42 @@ export default function Calendar() {
           {activeTab === "my-calendar" && (
             <div className="p-6 space-y-6">
 
-              {/* Connected state */}
-              {isCalendarConnected && !showEmbedWizard ? (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-50 border border-emerald-200">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                    <div className="flex-1">
-                      <p className="text-sm font-semibold text-emerald-800">Calendar connected</p>
-                      <p className="text-xs text-emerald-700 mt-0.5">
-                        {savedUrl
-                          ? "Your calendar is embedded below."
-                          : `${fromImported.length} event${fromImported.length !== 1 ? "s" : ""} imported from your calendar file.`}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => savedUrl ? setShowEmbedWizard(true) : setIcsModalOpen(true)}
-                      className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2 shrink-0"
-                    >
-                      Change
-                    </button>
-                  </div>
-
-                  {embedSrc && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-semibold text-foreground">Embedded Calendar</h4>
-                        <button onClick={handleDisconnectEmbed} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
-                          <X className="w-3 h-3" /> Remove
-                        </button>
-                      </div>
-                      <div style={{ height: 400 }} className="rounded-xl overflow-hidden border border-border">
-                        <iframe src={embedSrc} className="w-full h-full border-0" title="My Calendar" />
-                      </div>
-                    </div>
-                  )}
-
-                  {!savedUrl && (
-                    <button onClick={() => setIcsModalOpen(true)} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
-                      <Upload className="w-4 h-4" />
-                      Import more events
-                    </button>
-                  )}
-                </div>
-              ) : !showEmbedWizard ? (
-                /* Not connected — show options */
-                <div className="space-y-4">
-                  <div>
-                    <h3 className="font-display font-bold text-lg text-foreground mb-1">Connect Your Calendar</h3>
-                    <p className="text-sm text-muted-foreground">Import events or embed your calendar here.</p>
-                  </div>
+              {/* Always-visible connection options */}
+              {!showEmbedWizard && (
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Add your calendar</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       onClick={() => setIcsModalOpen(true)}
-                      className="flex items-start gap-3 p-4 rounded-xl border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
+                      className={`flex items-start gap-3 p-4 rounded-xl border-2 bg-background hover:bg-primary/5 transition-all text-left group ${fromImported.length > 0 ? "border-primary/40 bg-primary/5" : "border-border hover:border-primary/50"}`}
                     >
-                      <Upload className="w-6 h-6 text-primary shrink-0 mt-0.5" />
+                      <Upload className={`w-5 h-5 shrink-0 mt-0.5 ${fromImported.length > 0 ? "text-primary" : "text-primary"}`} />
                       <div>
-                        <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Upload .ics / .zip</div>
+                        <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
+                          Upload .ics / .zip
+                          {fromImported.length > 0 && <span className="text-xs font-normal text-primary">({fromImported.length} events)</span>}
+                        </div>
                         <div className="text-xs text-muted-foreground mt-0.5">Google Calendar, Apple, Outlook, school LMS</div>
                       </div>
                     </button>
                     <button
                       onClick={() => setShowEmbedWizard(true)}
-                      className="flex items-start gap-3 p-4 rounded-xl border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
+                      className={`flex items-start gap-3 p-4 rounded-xl border-2 bg-background hover:bg-primary/5 transition-all text-left group ${savedUrl ? "border-primary/40 bg-primary/5" : "border-border hover:border-primary/50"}`}
                     >
-                      <Link className="w-6 h-6 text-muted-foreground shrink-0 mt-0.5" />
+                      <Link className={`w-5 h-5 shrink-0 mt-0.5 ${savedUrl ? "text-primary" : "text-muted-foreground group-hover:text-primary"}`} />
                       <div>
-                        <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Embed URL</div>
+                        <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors flex items-center gap-2">
+                          Embed URL
+                          {savedUrl && <span className="text-xs font-normal text-primary">(connected)</span>}
+                        </div>
                         <div className="text-xs text-muted-foreground mt-0.5">Paste an embed link to display your calendar</div>
                       </div>
                     </button>
                   </div>
                 </div>
-              ) : null}
+              )}
 
-              {/* Embed wizard (shown in both connected and not-connected states) */}
+              {/* Embed wizard */}
               {showEmbedWizard && (
                 <div className="border border-border rounded-xl p-5 space-y-4 bg-secondary/20">
                   <div className="flex items-center justify-between">
@@ -495,11 +458,128 @@ export default function Calendar() {
                       value={embedInput}
                       onChange={e => setEmbedInput(e.target.value)}
                     />
-                    <Button variant="primary" onClick={handleSaveEmbed} disabled={!embedInput.trim() || updateProfile.isPending}>
-                      <Check className="w-4 h-4 mr-2" />
-                      {updateProfile.isPending ? "Connecting..." : "Connect Calendar"}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <Button variant="primary" onClick={handleSaveEmbed} disabled={!embedInput.trim() || updateProfile.isPending}>
+                        <Check className="w-4 h-4 mr-2" />
+                        {updateProfile.isPending ? "Connecting..." : "Connect Calendar"}
+                      </Button>
+                      {savedUrl && (
+                        <button onClick={handleDisconnectEmbed} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
+                          <X className="w-3 h-3" /> Remove embed
+                        </button>
+                      )}
+                    </div>
                   </div>
+                </div>
+              )}
+
+              {/* Embedded iframe calendar (from link) */}
+              {embedSrc && !showEmbedWizard && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-foreground">Embedded Calendar</h4>
+                    <button onClick={handleDisconnectEmbed} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
+                      <X className="w-3 h-3" /> Remove
+                    </button>
+                  </div>
+                  <div style={{ height: 420 }} className="rounded-xl overflow-hidden border border-border">
+                    <iframe src={embedSrc} className="w-full h-full border-0" title="My Calendar" />
+                  </div>
+                </div>
+              )}
+
+              {/* Imported events mini calendar */}
+              {fromImported.length > 0 && !showEmbedWizard && (() => {
+                const myCalStart = startOfWeek(startOfMonth(myCalDate));
+                const myCalEnd = endOfWeek(endOfMonth(myCalDate));
+                const myCalDays: Date[] = [];
+                let md = myCalStart;
+                while (md <= myCalEnd) { myCalDays.push(md); md = addDays(md, 1); }
+                const getImportedForDay = (day: Date) =>
+                  fromImported.filter(e => !isNaN(e.date.getTime()) && isSameDay(e.date, day));
+                const myCalSelectedEvents = myCalSelectedDay ? getImportedForDay(myCalSelectedDay) : [];
+                return (
+                  <div className="border border-border rounded-xl overflow-hidden">
+                    {/* Mini calendar header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-secondary/30">
+                      <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                        <CalIcon className="w-4 h-4 text-violet-500" />
+                        Imported Events
+                        <span className="text-xs font-normal text-muted-foreground">({fromImported.length})</span>
+                      </h4>
+                      <div className="flex items-center gap-1">
+                        <button onClick={() => setMyCalDate(subMonths(myCalDate, 1))} className="p-1.5 rounded-lg hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground">
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <span className="text-sm font-bold text-foreground px-2 min-w-[110px] text-center">
+                          {format(myCalDate, "MMMM yyyy")}
+                        </span>
+                        <button onClick={() => setMyCalDate(addMonths(myCalDate, 1))} className="p-1.5 rounded-lg hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground">
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    {/* Day headers */}
+                    <div className="grid grid-cols-7 border-b border-border bg-secondary/20">
+                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => (
+                        <div key={day} className="p-2 text-center text-[10px] font-bold text-muted-foreground uppercase tracking-wider">{day}</div>
+                      ))}
+                    </div>
+                    {/* Calendar cells */}
+                    <div className="grid grid-cols-7">
+                      {myCalDays.map((day, i) => {
+                        const dayEvts = getImportedForDay(day);
+                        const inMon = isSameMonth(day, myCalDate);
+                        const isSel = !!myCalSelectedDay && isSameDay(day, myCalSelectedDay);
+                        const todayDay = isToday(day);
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => setMyCalSelectedDay(isSel ? null : day)}
+                            className={`min-h-[64px] p-1 border-b border-r border-border text-left transition-colors ${!inMon ? "bg-secondary/20" : "hover:bg-secondary/40"} ${isSel ? "bg-violet-50 ring-inset ring-2 ring-violet-400" : ""}`}
+                          >
+                            <span className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full mb-0.5 ${todayDay ? "bg-primary text-primary-foreground" : !inMon ? "text-muted-foreground/40" : "text-foreground"}`}>
+                              {format(day, "d")}
+                            </span>
+                            <div className="space-y-0.5">
+                              {dayEvts.slice(0, 2).map(evt => (
+                                <div key={evt.key} className={`text-[9px] font-semibold text-white rounded px-1 py-px truncate ${IMPORTED_COLOR}`}>
+                                  {evt.title}
+                                </div>
+                              ))}
+                              {dayEvts.length > 2 && (
+                                <div className="text-[9px] font-bold text-muted-foreground pl-1">+{dayEvts.length - 2}</div>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {/* Selected day detail */}
+                    {myCalSelectedDay && myCalSelectedEvents.length > 0 && (
+                      <div className="border-t border-border p-4 bg-secondary/10 space-y-2">
+                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{format(myCalSelectedDay, "MMMM d, yyyy")}</p>
+                        <div className="space-y-2">
+                          {myCalSelectedEvents.map(evt => (
+                            <EventCard key={evt.key} event={evt} color={IMPORTED_COLOR} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {myCalSelectedDay && myCalSelectedEvents.length === 0 && (
+                      <div className="border-t border-border p-4 bg-secondary/10">
+                        <p className="text-xs text-muted-foreground">{format(myCalSelectedDay, "MMMM d")} — no imported events.</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Empty state */}
+              {fromImported.length === 0 && !embedSrc && !showEmbedWizard && (
+                <div className="text-center py-12 text-muted-foreground">
+                  <CalIcon className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                  <p className="text-sm">No events yet. Upload an .ics file or add an embed link above.</p>
                 </div>
               )}
             </div>
