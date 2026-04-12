@@ -25,11 +25,18 @@ export default function GradeTracker() {
           
           // Calculate current stats
           const gradedItems = items.filter(i => i.grade?.score !== null && i.grade?.score !== undefined);
-          const weightAchieved = gradedItems.reduce((sum, i) => sum + (Number(i.grade!.score) / Number(i.assignment.maxScore)) * Number(i.assignment.weight), 0);
-          const weightAttempted = gradedItems.reduce((sum, i) => sum + Number(i.assignment.weight), 0);
+          const weightAchieved = gradedItems.reduce((sum, i) => {
+            const maxScore = Number(i.assignment.maxScore);
+            const weight = Number(i.assignment.weight);
+            if (!maxScore || !weight || isNaN(maxScore) || isNaN(weight)) return sum;
+            return sum + (Number(i.grade!.score) / maxScore) * weight;
+          }, 0);
+          const weightAttempted = gradedItems.reduce((sum, i) => {
+            const w = Number(i.assignment.weight);
+            return sum + (isNaN(w) ? 0 : w);
+          }, 0);
           const currentGrade = weightAttempted > 0 ? (weightAchieved / weightAttempted) * 100 : 0;
-          
-          const maxPossible = weightAchieved + (100 - weightAttempted);
+          const maxPossible = Math.min(100, weightAchieved + Math.max(0, 100 - weightAttempted));
 
           const isExpanded = expandedCourse === course.id;
 

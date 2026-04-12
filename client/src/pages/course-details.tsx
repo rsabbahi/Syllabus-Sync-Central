@@ -69,7 +69,7 @@ export default function CourseDetails() {
         {activeTab === "syllabus" && <SyllabusTab courseId={courseId} syllabi={course.syllabi || []} onManualAdd={() => {
           setIsAdding(true);
           setActiveTab("assignments");
-        }} />}
+        }} onSuccess={() => setActiveTab("assignments")} />}
         {activeTab === "prep" && <PrepTab courseId={courseId} hasSyllabus={hasSyllabus} />}
       </div>
     </div>
@@ -178,9 +178,9 @@ function PrepTab({ courseId, hasSyllabus }: { courseId: number; hasSyllabus: boo
             <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
               <h3 className="font-display font-bold text-lg mb-4">Key Topics</h3>
               <div className="flex flex-wrap gap-2">
-                {prep.topics.map((t: string, i: number) => (
+                {prep.topics.map((t: any, i: number) => (
                   <span key={i} className="bg-primary/10 text-primary px-3 py-1.5 rounded-xl text-sm font-semibold" data-testid={`topic-${i}`}>
-                    {t}
+                    {typeof t === "string" ? t : t?.name ?? t?.title ?? String(t)}
                   </span>
                 ))}
               </div>
@@ -193,10 +193,10 @@ function PrepTab({ courseId, hasSyllabus }: { courseId: number; hasSyllabus: boo
               <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
                 <h3 className="font-display font-bold text-lg mb-4">Reading Prompts</h3>
                 <ol className="space-y-3">
-                  {prep.readingPrompts.map((p: string, i: number) => (
+                  {prep.readingPrompts.map((p: any, i: number) => (
                     <li key={i} className="flex gap-3">
                       <span className="shrink-0 w-6 h-6 rounded-full bg-primary/15 text-primary text-xs font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
-                      <p className="text-sm text-muted-foreground leading-relaxed">{p}</p>
+                      <p className="text-sm text-muted-foreground leading-relaxed">{typeof p === "string" ? p : p?.text ?? p?.prompt ?? String(p)}</p>
                     </li>
                   ))}
                 </ol>
@@ -208,10 +208,10 @@ function PrepTab({ courseId, hasSyllabus }: { courseId: number; hasSyllabus: boo
               <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
                 <h3 className="font-display font-bold text-lg mb-4">Practice Questions</h3>
                 <ol className="space-y-3">
-                  {prep.practiceQuestions.map((q: string, i: number) => (
+                  {prep.practiceQuestions.map((q: any, i: number) => (
                     <li key={i} className="flex gap-3">
                       <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-xs font-bold flex items-center justify-center mt-0.5">Q{i + 1}</span>
-                      <p className="text-sm text-foreground font-medium leading-relaxed">{q}</p>
+                      <p className="text-sm text-foreground font-medium leading-relaxed">{typeof q === "string" ? q : q?.question ?? q?.text ?? String(q)}</p>
                     </li>
                   ))}
                 </ol>
@@ -427,7 +427,7 @@ function AssignmentRow({ assignment, onDelete }: { assignment: any; onDelete: ()
 
 // ─── SYLLABUS TAB ────────────────────────────────────────────────────────────
 
-function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syllabi: any[], onManualAdd: () => void }) {
+function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: number, syllabi: any[], onManualAdd: () => void, onSuccess?: () => void }) {
   const upload = useUploadSyllabus(courseId);
   const deleteSyllabus = useDeleteSyllabus(courseId);
   const [file, setFile] = useState<File | null>(null);
@@ -437,7 +437,6 @@ function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syl
     upload.mutate(file, {
       onSuccess: () => {
         setFile(null);
-        window.location.reload();
       }
     });
   };
@@ -490,7 +489,7 @@ function SyllabusTab({ courseId, syllabi, onManualAdd }: { courseId: number, syl
             <h4 className="text-green-800 font-bold text-lg">Syllabus Parsed Successfully!</h4>
             <p className="text-green-700">Assignments and study tasks have been created from your syllabus.</p>
           </div>
-          <Button variant="primary" onClick={() => window.location.reload()} data-testid="button-view-assignments">
+          <Button variant="primary" onClick={onSuccess} data-testid="button-view-assignments">
             View Assignments
           </Button>
         </div>

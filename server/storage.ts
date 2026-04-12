@@ -272,7 +272,7 @@ export class DatabaseStorage implements IStorage {
     let baseDate = new Date(task.dueDate);
 
     for (let i = 1; i <= weeks; i += step) {
-      const nextDate = addWeeks(baseDate, step * (i === 1 ? 1 : 1));
+      const nextDate = addWeeks(baseDate, step);
       // Adjust to same day of week if specified
       if (recurrenceDayOfWeek !== null && recurrenceDayOfWeek !== undefined) {
         while (nextDate.getDay() !== recurrenceDayOfWeek) {

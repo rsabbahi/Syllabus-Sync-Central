@@ -181,7 +181,7 @@ export default function Dashboard() {
                             </h3>
                             {event.eventType === 'assignment' && (
                               <p className="text-sm text-muted-foreground">
-                                Weight: {(event as any).weight}% • Type: {(event as any).type}
+                                {(event as any).weight != null ? `Weight: ${(event as any).weight}% • ` : ""}Type: {(event as any).type ?? "—"}
                               </p>
                             )}
                           </div>
