@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { eq, inArray } from "drizzle-orm";
-import { assignments, tasks, userGrades, updateUserProfileSchema, updateCalendarEventSchema, insertCalendarEventSchema } from "@shared/schema";
+import { assignments, tasks, userGrades, updateUserProfileSchema } from "@shared/schema";
 import { isAuthenticated, setupAuth } from "./replit_integrations/auth";
 import multer from "multer";
 import { createRequire } from "module";
@@ -34,15 +34,34 @@ const execAsync = promisify(exec);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    _openai = new OpenAI({
-      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-    });
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
+
+// ── Syllabus assignment save helper ──────────────────────────────────────────
+// Validates and persists a single extracted assignment. Returns true on success.
+const VALID_TYPES = ["exam","hw","paper","project","quiz","lab","reading","discussion","presentation","lecture"];
+
+async function saveAssignment(storage: any, courseId: number, userId: string, a: any): Promise<boolean> {
+  const name = String(a.name || "").trim();
+  if (!name || name === "undefined") return false;
+
+  const rawType = String(a.type || "hw").toLowerCase().replace(/[^a-z]/g, "");
+  const type = VALID_TYPES.includes(rawType) ? rawType : "hw";
+
+  const weight = Math.min(100, Math.max(0, Number(a.weight) || 0));
+  const maxScore = Math.max(1, Number(a.maxScore) || 100);
+
+  const dueDate = new Date(a.dueDate);
+  if (isNaN(dueDate.getTime())) {
+    console.warn(`[Syllabus] Invalid date for "${name}": ${a.dueDate}`);
+    return false;
   }
-  return _openai;
+
+  const newAssignment = await storage.createAssignment(courseId, { name, type, dueDate, weight, maxScore });
+  await storage.generateTasksForAssignment(userId, newAssignment);
+  return true;
 }
 
 export async function registerRoutes(
@@ -351,272 +370,307 @@ export async function registerRoutes(
     try {
       const userId = req.user.claims.sub;
       const courseId = Number(req.params.courseId);
-      
+
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
-      
-      let text = "";
-      try {
-        console.log("Using Google Gemini API to extract PDF content...");
-        
-        // Convert buffer to base64 for Gemini API
-        const base64Pdf = req.file.buffer.toString("base64");
-        
-        // Call Google Gemini API with vision capabilities
-        // Use Gemini Pro for intelligent document analysis with multiple passes
-        const geminiResponse = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": process.env.Syllabus_API_KEY
-          },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                {
-                  inline_data: {
-                    mime_type: "application/pdf",
-                    data: base64Pdf
-                  }
-                },
-                {
-                  text: `You are a world-class syllabus parser with expertise in educational documents. Your task is to extract EVERY piece of course information with perfect accuracy.
 
-EXTRACTION INSTRUCTIONS:
-1. Read the entire document page by page
-2. Identify all sections: Course Info, Schedule, Assignments, Grading, Policies
-3. For EVERY deadline, exam, quiz, assignment, or reading:
-   - Extract exact date (day, month, year)
-   - Extract assignment/activity name
-   - Extract point value or percentage weight
-   - Extract assignment type (homework, exam, quiz, paper, project, lab, reading, discussion, presentation)
-4. Handle complex layouts:
-   - Tables: Parse each row as separate item
-   - Multi-column text: Merge logically by proximity
-   - Scanned/image text: Use OCR interpretation
-5. Resolve ambiguities:
-   - Week numbers → convert to specific dates (assume 15-week semester starting Jan 13, 2026)
-   - "M/W/F" + time → extract as pattern
-   - Recurring items → list each occurrence
-6. Extract ALL grading information:
-   - Points per assignment
-   - Percentage weights
-   - Grade scale (A/B/C etc)
-   - Curves or adjustments
+      const today = new Date();
+      const currentYear = today.getFullYear();
 
-Return a COMPLETE, VERBOSE reconstruction of the document's academic content.`
-                }
-              ]
-            }]
-          })
-        });
+      // ── Shared extraction prompt ────────────────────────────────────────────
+      // Used by both Gemini (which receives the raw PDF) and GPT-4o (which
+      // receives extracted text). Gemini is the preferred path because it sees
+      // the actual document layout including tables, multi-column text, and
+      // scanned/image content. GPT-4o is used when no Gemini key is present.
 
-        const geminiData = await geminiResponse.json();
-        
-        if (!geminiResponse.ok || !geminiData.candidates?.[0]?.content?.parts?.[0]?.text) {
-          throw new Error("Gemini API failed to extract content");
-        }
-        
-        text = geminiData.candidates[0].content.parts[0].text;
-        console.log("Gemini extraction successful, text length:", text.length);
-        
-        if (!text || text.trim().length < 50) {
-          throw new Error("Could not extract meaningful text from PDF");
-        }
-        
-        text = text.substring(0, 50000);
-      } catch (err) {
-        console.error("PDF extraction failed:", err);
-        return res.status(422).json({ 
-          message: "We couldn't read the text in this PDF. It might be a scanned image or encrypted. Please try a different version or add assignments manually." 
-        });
-      }
+      const EXTRACTION_PROMPT = `You are an expert academic syllabus parser with 20 years of experience reading every type of university syllabus. Your task: extract EVERY assignment, deadline, exam, quiz, homework, project, lab, reading, and due date from this syllabus — including anything that repeats on a schedule.
 
-      const prompt = `You are the most intelligent and thorough syllabus parser in the world. Your ONLY job is to extract EVERY academic deadline, assignment, and event from the course material. Return ONLY valid JSON.
+TODAY: ${today.toISOString().split("T")[0]}
+ACADEMIC YEAR: ${currentYear}–${currentYear + 1}
 
-DOCUMENT TEXT:
----
-${text.substring(0, 50000)}
----
+═══════════════════════════════════════════════
+PHASE 1 — UNDERSTAND THE DOCUMENT STRUCTURE
+═══════════════════════════════════════════════
+Before extracting, identify:
+1. Semester start and end dates
+2. Days the class meets (e.g. Mon/Wed/Fri, Tues/Thurs)
+3. Any grading breakdown table (e.g. "Homework 30%, Exams 40%")
+4. Total number of each assignment type mentioned
 
-JSON FORMAT (return ONLY this, no explanation):
+═══════════════════════════════════════════════
+PHASE 2 — EXTRACT ALL ASSIGNMENTS
+═══════════════════════════════════════════════
+
+RECURRING PATTERNS — these must be FULLY EXPANDED:
+
+Pattern → What to generate:
+"HW due every Sunday" → one HW entry for every Sunday in the semester
+"Weekly quiz on Monday" → one quiz for every Monday class
+"Reading before each class" → one reading per class meeting day
+"10 problem sets, due Fridays" → 10 separate entries, one per Friday
+"Lab report every other week" → one entry every 2 weeks
+"Participation grade (weekly)" → one entry per week
+"Discussion post each Wednesday" → one per Wednesday
+"Chapter reading before Tuesday lecture" → one per Tuesday
+"Daily warm-up exercise" → one per class day
+
+Rules for recurring:
+- Count actual occurrences based on the semester length
+- Name them "Homework 1", "Homework 2" ... or "Week 1 Reading", "Week 2 Reading" etc.
+- If the syllabus says "10 homeworks due Sundays", generate exactly 10 entries on consecutive Sundays
+- If it says "weekly" with no specific day, use Sunday as the due date
+
+ONE-OFF ASSIGNMENTS — find every item with a specific date:
+- Exams with dates and times
+- Project deadlines
+- Paper due dates
+- Lab reports on specific dates
+- Presentations
+- Any item in a week-by-week schedule table
+
+TABLE PARSING — for schedule tables:
+- Each row is typically one week
+- Columns may include: Week, Date, Topic, Assignment Due, Points
+- Extract every "Assignment Due" cell as a separate item
+- If a row has multiple assignments, create one entry per assignment
+
+═══════════════════════════════════════════════
+PHASE 3 — ASSIGN WEIGHTS
+═══════════════════════════════════════════════
+- If individual weights are listed: use them
+- If only category weights are listed (e.g. "Homework = 30%"):
+  Count how many homeworks there are, divide: 30% ÷ 10 homeworks = 3% each
+- If no weight info: use 0
+- Weights should be percentages (0-100)
+
+═══════════════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════════════
+Return ONLY valid JSON. No explanation. No markdown. No text before or after.
+
 {
+  "semesterStart": "YYYY-MM-DD",
+  "semesterEnd": "YYYY-MM-DD",
   "assignments": [
     {
-      "name": "Exact assignment name",
-      "type": "exam|hw|paper|project|quiz|lab|reading|discussion|presentation|lecture",
+      "name": "Descriptive assignment name",
+      "type": "hw|exam|paper|project|quiz|lab|reading|discussion|presentation",
       "dueDate": "YYYY-MM-DDTHH:mm:ssZ",
-      "weight": percentage_number_or_0,
-      "maxScore": points_or_100
+      "weight": 3,
+      "maxScore": 100
     }
   ]
 }
 
-RULES (NON-NEGOTIABLE):
-1. **ZERO SKIPPING**: Extract EVERY single item. If there's a date + assignment name, extract it.
-2. **AGGRESSIVE SEARCH**: Look in: schedules, calendars, assignment lists, tables, course outline, syllabus, week-by-week breakdowns, exam dates, project timelines, reading lists with dates, discussion boards, labs, quizzes, participation events.
-3. **DATE INTELLIGENCE**:
-   - Parse "Jan 12" → "2026-01-12T23:59:59Z"
-   - Parse "1/15" → "2026-01-15T23:59:59Z"
-   - Parse "Week 3" with Jan 13 start → calculate actual date
-   - Parse "M/W/F" + time → extract as 3 separate weekly items
-   - Parse "by Friday" in context → use nearest Friday
-   - Parse ranges "Jan 10-15" → use end date (Jan 15)
-4. **WEIGHT EXTRACTION**: Find "30%", "30 points", "worth 50 points", "counts as 20%" near each item. If not found, use 0.
-5. **RECURRING PATTERN**: "Quiz every Monday Jan 13-Apr 25" → generate entry for EVERY Monday in that range.
-6. **TABLE PARSING**: Each table row = separate item. Extract all columns (name, date, points, type).
-7. **MULTI-COLUMN TEXT**: Read columns left-to-right, group by date, extract contiguous date+name pairs.
-8. **INTELLIGENT NAMING**: 
-   - "Chapter 5 reading due Feb 3" → name: "Chapter 5 Reading"
-   - "Jan 15: Intro to Calculus (lecture)" → name: "Lecture: Intro to Calculus"
-   - "Midterm Exam Wed March 5, 10-11:30am" → name: "Midterm Exam"
-9. **TYPE INFERENCE**: Exam/Midterm/Final→exam, HW/Assignment→hw, Paper/Essay→paper, Project→project, Quiz→quiz, Lab→lab, Reading→reading, Discussion→discussion, Presentation→presentation, Lecture/Class→lecture.
-10. **MISSING DATES**: If assignment has no date, use "2026-05-15T23:59:59Z".
-11. **MISSING WEIGHTS**: Use 0 if not specified.
-12. **AMBIGUITY**: When unsure, default to most recent reasonable date in 2026 (Jan-May).
-13. **NO DUPLICATION**: Remove exact duplicates by name+date.
-14. **RETURN ONLY JSON**: No text before/after JSON block.`;
+TYPE GUIDE:
+exam → midterm, final, test, in-class exam
+hw → homework, problem set, assignment, worksheet, exercise
+paper → essay, report, write-up, response paper, reflection
+project → project, final project, group project, capstone
+quiz → quiz, pop quiz, weekly quiz
+lab → lab, laboratory report, lab write-up
+reading → reading, chapter, textbook section
+discussion → discussion post, forum post, response post, Blackboard post
+presentation → presentation, talk, demo, show-and-tell
 
-      let parsedContent = null;
+ABSOLUTE RULES:
+1. EXPAND every recurring pattern — never use "recurring" as a single entry
+2. Use 23:59:59Z for homework/papers. Use actual exam time if stated (e.g. 14:00:00Z)
+3. If only month+day given, use the year that makes sense in the semester
+4. Include EVERYTHING — even small participation assignments
+5. No duplicates (same name + same date)
+6. If a date is unclear, make a reasonable estimate based on semester context
+7. Return ONLY the JSON object`;
+
+      let parsedContent: any = null;
       let createdCount = 0;
-      
-      try {
-        // Run GPT-4o and Mistral in parallel for multi-model extraction
-        const [gptRes, mistralRes] = await Promise.all([
-          // GPT-4o extraction
-          getOpenAI().chat.completions.create({
-            model: "gpt-4o",
-            messages: [{ role: "user", content: prompt }],
-            response_format: { type: "json_object" }
-          }),
-          // Mistral extraction with same prompt
-          fetch("https://api.mistral.ai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${process.env.Mistral_API_Key}`
-            },
-            body: JSON.stringify({
-              model: "mistral-large-latest",
-              messages: [
-                {
-                  role: "user",
-                  content: prompt
-                }
-              ],
-              response_format: { type: "json_object" }
-            })
-          }).then(res => res.json())
-        ]);
-        
-        console.log("GPT-4o and Mistral extraction started in parallel");
-        
-        // Parse both responses
-        let gptAssignments: any[] = [];
-        let mistralAssignments: any[] = [];
-        
-        try {
-          let gptRaw = gptRes.choices[0].message?.content || "{}";
-          try {
-            const gptParsed = JSON.parse(gptRaw);
-            gptAssignments = gptParsed.assignments || gptParsed.items || [];
-          } catch (e) {
-            const jsonMatch = gptRaw.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const gptParsed = JSON.parse(jsonMatch[0]);
-              gptAssignments = gptParsed.assignments || gptParsed.items || [];
-            }
-          }
-          console.log("GPT-4o extracted:", gptAssignments.length, "items");
-        } catch (err) {
-          console.error("GPT-4o parsing error:", err);
-        }
-        
-        try {
-          let mistralRaw = mistralRes.choices?.[0]?.message?.content || "{}";
-          try {
-            const mistralParsed = JSON.parse(mistralRaw);
-            mistralAssignments = mistralParsed.assignments || mistralParsed.items || [];
-          } catch (e) {
-            const jsonMatch = mistralRaw.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const mistralParsed = JSON.parse(jsonMatch[0]);
-              mistralAssignments = mistralParsed.assignments || mistralParsed.items || [];
-            }
-          }
-          console.log("Mistral extracted:", mistralAssignments.length, "items");
-        } catch (err) {
-          console.error("Mistral parsing error:", err);
-        }
-        
-        // Merge and deduplicate both models' results
-        const mergedMap = new Map<string, any>();
-        
-        const addAssignments = (assignments: any[]) => {
-          for (const a of assignments) {
-            if (a.name && a.dueDate && a.type) {
-              const key = `${a.name.trim()}|${a.dueDate}`;
-              if (!mergedMap.has(key)) {
-                mergedMap.set(key, a);
-              }
-            }
-          }
-        };
-        
-        addAssignments(gptAssignments);
-        addAssignments(mistralAssignments);
-        
-        let extractedAssignments = Array.from(mergedMap.values());
-        parsedContent = { assignments: extractedAssignments };
-        
-        console.log(`Merged extraction: ${gptAssignments.length} (GPT) + ${mistralAssignments.length} (Mistral) = ${extractedAssignments.length} unique items`);
-        
-        if (Array.isArray(extractedAssignments) && extractedAssignments.length > 0) {
-          await storage.clearCourseAssignments(courseId);
+      let extractionError = "";
+      let rawTextForStorage = "";
 
-          for (const a of extractedAssignments) {
+      // ── PATH A: Gemini 1.5 Pro — sees the raw PDF directly ─────────────────
+      // Gemini receives the actual PDF bytes so it can see tables, columns,
+      // scanned content, and complex formatting — far superior to plain text.
+      // This is the PRIMARY path.
+      let geminiSucceeded = false;
+
+      if (process.env.Syllabus_API_KEY) {
+        try {
+          console.log("[Syllabus] PATH A: Sending raw PDF to Gemini 1.5 Pro...");
+          const base64Pdf = req.file.buffer.toString("base64");
+
+          // Try Gemini 2.0 Flash first (faster, cheaper, still very capable)
+          // Fall back to 1.5 Pro if Flash fails
+          const geminiModels = ["gemini-2.0-flash", "gemini-1.5-pro"];
+          let geminiResult: string | null = null;
+
+          for (const model of geminiModels) {
             try {
-              const name = String(a.name).trim();
-              const type = String(a.type).toLowerCase().trim();
-              const weight = Math.min(100, Math.max(0, Number(a.weight) || 0));
-              const maxScore = Math.max(0, Number(a.maxScore) || 100);
-              
-              const dueDate = new Date(a.dueDate);
-              if (isNaN(dueDate.getTime())) {
-                console.warn("Invalid date for:", name, a.dueDate);
+              const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "x-goog-api-key": process.env.Syllabus_API_KEY,
+                },
+                body: JSON.stringify({
+                  contents: [{
+                    parts: [
+                      {
+                        inline_data: {
+                          mime_type: "application/pdf",
+                          data: base64Pdf,
+                        },
+                      },
+                      { text: EXTRACTION_PROMPT },
+                    ],
+                  }],
+                  generationConfig: {
+                    temperature: 0.1,
+                    responseMimeType: "application/json",
+                  },
+                }),
+              });
+
+              const geminiData = await geminiRes.json();
+
+              if (!geminiRes.ok) {
+                console.warn(`[Syllabus] Gemini ${model} returned ${geminiRes.status}:`, geminiData.error?.message);
                 continue;
               }
 
-              const newAssignment = await storage.createAssignment(courseId, {
-                name,
-                type,
-                dueDate,
-                weight,
-                maxScore
-              });
-              await storage.generateTasksForAssignment(userId, newAssignment);
-              createdCount++;
-            } catch (itemErr) {
-              console.error("Error creating assignment:", a.name, itemErr);
+              const candidate = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (candidate && candidate.length > 50) {
+                geminiResult = candidate;
+                console.log(`[Syllabus] Gemini ${model} responded (${candidate.length} chars)`);
+                break;
+              }
+            } catch (modelErr) {
+              console.warn(`[Syllabus] Gemini ${model} failed:`, modelErr);
             }
           }
-        }
-        
-        console.log(`Successfully created ${createdCount} assignments from dual-model extraction.`);
-      } catch (err) {
-        console.error("Multi-model extraction error:", err);
-      }
-      
-      await storage.addSyllabus(courseId, userId, "local-upload", text, parsedContent);
 
-      let message = createdCount > 0 
-        ? `Successfully extracted ${createdCount} assignments from your syllabus!`
-        : "Syllabus processed. No assignments could be extracted — try adding them manually.";
-      res.json({ success: true, message });
+          if (geminiResult) {
+            // Parse Gemini's JSON response
+            let parsed: any = {};
+            try {
+              parsed = JSON.parse(geminiResult);
+            } catch {
+              const jsonMatch = geminiResult.match(/\{[\s\S]*\}/);
+              if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+            }
+
+            const extractedAssignments: any[] = parsed.assignments || parsed.items || [];
+            parsedContent = parsed;
+            rawTextForStorage = `[Extracted via Gemini Vision — ${extractedAssignments.length} assignments found]`;
+
+            console.log(`[Syllabus] Gemini extracted ${extractedAssignments.length} assignments`);
+
+            if (extractedAssignments.length > 0) {
+              await storage.clearCourseAssignments(courseId);
+              for (const a of extractedAssignments) {
+                try {
+                  const saved = await saveAssignment(storage, courseId, userId, a);
+                  if (saved) createdCount++;
+                } catch (itemErr) {
+                  console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
+                }
+              }
+              geminiSucceeded = true;
+            }
+          }
+        } catch (geminiErr) {
+          console.error("[Syllabus] Gemini PATH A failed entirely:", geminiErr);
+        }
+      }
+
+      // ── PATH B: pdf-parse → GPT-4o — used when Gemini key is absent ────────
+      // Also used as a fallback if Gemini returned 0 assignments.
+      if (!geminiSucceeded) {
+        console.log("[Syllabus] PATH B: pdf-parse + GPT-4o extraction...");
+
+        // Extract text from PDF
+        let text = "";
+        try {
+          const pdfData = await pdfParse(req.file.buffer);
+          text = pdfData.text || "";
+          rawTextForStorage = text.substring(0, 50000);
+          console.log(`[Syllabus] pdf-parse: ${text.length} characters`);
+        } catch (pdfErr) {
+          console.error("[Syllabus] pdf-parse failed:", pdfErr);
+        }
+
+        if (text.trim().length < 100) {
+          // PDF has no readable text — scanned image, need Gemini
+          await storage.addSyllabus(courseId, userId, "local-upload", "scanned-pdf", null);
+          return res.status(422).json({
+            message: "This PDF appears to be a scanned image with no readable text. To process it automatically, a Google AI key (Syllabus_API_KEY) must be configured in Replit Secrets. Until then, please add your assignments manually using the '+ Add Assignment' button.",
+          });
+        }
+
+        // Inject the extracted text into the prompt for GPT-4o
+        const gptPrompt = EXTRACTION_PROMPT + `\n\n═══════════════════════════════════════════════\nSYLLABUS TEXT:\n═══════════════════════════════════════════════\n${text.substring(0, 60000)}`;
+
+        try {
+          console.log("[Syllabus] Calling GPT-4o...");
+          const aiResponse = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [{ role: "user", content: gptPrompt }],
+            response_format: { type: "json_object" },
+            temperature: 0.1,
+          });
+
+          const rawContent = aiResponse.choices[0].message?.content || "{}";
+          let parsed: any = {};
+          try {
+            parsed = JSON.parse(rawContent);
+          } catch {
+            const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+          }
+
+          const extractedAssignments: any[] = parsed.assignments || parsed.items || [];
+          parsedContent = parsed;
+          console.log(`[Syllabus] GPT-4o extracted ${extractedAssignments.length} assignments`);
+
+          if (extractedAssignments.length > 0) {
+            await storage.clearCourseAssignments(courseId);
+            for (const a of extractedAssignments) {
+              try {
+                const saved = await saveAssignment(storage, courseId, userId, a);
+                if (saved) createdCount++;
+              } catch (itemErr) {
+                console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
+              }
+            }
+          }
+        } catch (aiErr: any) {
+          extractionError = aiErr?.message || "Unknown AI error";
+          console.error("[Syllabus] GPT-4o failed:", aiErr);
+        }
+      }
+
+      // ── Save syllabus record & respond ──────────────────────────────────────
+      await storage.addSyllabus(courseId, userId, "local-upload", rawTextForStorage, parsedContent);
+
+      if (createdCount > 0) {
+        res.json({
+          success: true,
+          message: `✓ Extracted ${createdCount} assignment${createdCount !== 1 ? "s" : ""} from your syllabus. Check the Assignments tab to review them.`,
+        });
+      } else if (extractionError) {
+        res.status(500).json({
+          message: `AI extraction failed: ${extractionError}. Please try uploading again, or add assignments manually.`,
+        });
+      } else {
+        res.json({
+          success: true,
+          message: "Syllabus saved, but no assignments with due dates could be found. Your professor may not have listed specific dates yet — you can add assignments manually.",
+        });
+      }
+
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: "Failed to process syllabus" });
+      console.error("[Syllabus] Fatal upload error:", err);
+      res.status(500).json({ message: "Failed to process syllabus. Please try again." });
     }
   });
 
@@ -671,7 +725,7 @@ Respond ONLY with valid JSON matching this exact schema:
 
       const userPrompt = `Course syllabus content:\n\n${rawText.slice(0, 6000)}`;
 
-      const completion = await getOpenAI().chat.completions.create({
+      const completion = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
           { role: "system", content: systemPrompt },
@@ -732,7 +786,7 @@ Make the search queries specific to the assignment topic. URL-encode the query i
       const userPrompt = `Assignment: "${assignment.name}" (type: ${assignment.type})
 Provide 6 study resources that would help a student complete this assignment.`;
 
-      const completion = await getOpenAI().chat.completions.create({
+      const completion = await openai.chat.completions.create({
         model: "gpt-4o",
         messages: [
           { role: "system", content: systemPrompt },
@@ -940,53 +994,6 @@ Provide 6 study resources that would help a student complete this assignment.`;
     } catch (err) {
       console.error('Microsoft sync error:', err);
       res.status(500).json({ message: "Failed to sync Microsoft Calendar" });
-    }
-  });
-
-  // ── CALENDAR EVENT CRUD ───────────────────────────────────────────────────
-
-  // Create a manual calendar event
-  app.post('/api/calendar/events', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const parsed = insertCalendarEventSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
-      const event = await storage.createCalendarEvent(userId, parsed.data);
-      res.status(201).json(event);
-    } catch (err) {
-      console.error('Create calendar event error:', err);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  // Update a calendar event (title, dates, color, eventType, etc.)
-  app.patch('/api/calendar/events/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const id = Number(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ message: "Invalid event id" });
-      const parsed = updateCalendarEventSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
-      const updated = await storage.updateCalendarEvent(userId, id, parsed.data);
-      if (!updated) return res.status(404).json({ message: "Event not found" });
-      res.json(updated);
-    } catch (err) {
-      console.error('Update calendar event error:', err);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  // Delete a calendar event
-  app.delete('/api/calendar/events/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const id = Number(req.params.id);
-      if (isNaN(id)) return res.status(400).json({ message: "Invalid event id" });
-      await storage.deleteCalendarEvent(userId, id);
-      res.status(204).end();
-    } catch (err) {
-      console.error('Delete calendar event error:', err);
-      res.status(500).json({ message: "Internal server error" });
     }
   });
 
