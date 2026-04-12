@@ -157,7 +157,6 @@ const PROVIDER_LABEL: Record<string, string> = {
 // ── Main Component ────────────────────────────────────────────────────────
 
 export default function Calendar() {
-  const [location] = useLocation();
   const { data: events = [], isLoading } = useCalendarEvents();
   const { data: taskList = [] } = useTasks();
   const { data: profile, isLoading: profileLoading } = useProfile();
