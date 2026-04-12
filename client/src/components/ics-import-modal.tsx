@@ -16,7 +16,7 @@ type Step = "idle" | "file-selected" | "parsing" | "preview" | "importing" | "do
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSuccess?: () => void;
+  onSuccess?: (firstEventDate?: Date) => void;
 }
 
 export function IcsImportModal({ open, onOpenChange, onSuccess }: Props) {
@@ -87,7 +87,8 @@ export function IcsImportModal({ open, onOpenChange, onSuccess }: Props) {
           title: "Calendar imported",
           description: `${imported} event${imported !== 1 ? "s" : ""} added as tasks${skipped > 0 ? `, ${skipped} already existed` : ""}.`,
         });
-        onSuccess?.();
+        const firstDate = toImport[0]?.startDate ? new Date(toImport[0].startDate) : undefined;
+        onSuccess?.(firstDate);
         setTimeout(() => {
           onOpenChange(false);
           reset();

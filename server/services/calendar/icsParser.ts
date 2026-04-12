@@ -12,6 +12,19 @@ export interface NormalizedEvent {
   location: string | null;
 }
 
+/**
+ * node-ical sometimes returns text fields as { val: string, params: {...} }
+ * when the ICS property has parameters (e.g. SUMMARY;LANGUAGE=en:CS 101 Exam).
+ * This helper safely extracts the plain string value in either case.
+ */
+function extractText(val: any): string {
+  if (!val) return '';
+  if (typeof val === 'string') return val.trim();
+  if (typeof val === 'object' && val !== null && 'val' in val)
+    return String(val.val).trim();
+  return String(val).trim();
+}
+
 export function parseIcsBuffer(buffer: Buffer): NormalizedEvent[] {
   const content = buffer.toString('utf8');
   let parsed: Record<string, any>;
@@ -41,15 +54,15 @@ export function parseIcsBuffer(buffer: Buffer): NormalizedEvent[] {
     const rawEnd = event.end;
     const end = rawEnd ? new Date(rawEnd) : null;
 
-    const uid = String(event.uid || `${event.summary || 'event'}:${start.toISOString()}`);
+    const uid = String(event.uid || `${extractText(event.summary) || 'event'}:${start.toISOString()}`);
 
     events.push({
       externalId: uid,
-      title: String(event.summary || 'Untitled Event').trim(),
+      title: extractText(event.summary) || 'Untitled Event',
       startDate: start,
       endDate: end && !isNaN(end.getTime()) ? end : null,
-      description: event.description ? String(event.description).trim() : null,
-      location: event.location ? String(event.location).trim() : null,
+      description: extractText(event.description) || null,
+      location: extractText(event.location) || null,
     });
   }
 

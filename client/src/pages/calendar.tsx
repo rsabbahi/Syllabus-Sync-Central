@@ -158,10 +158,15 @@ export default function Calendar() {
     });
   };
 
-  function handleIcsImportSuccess() {
+  function handleIcsImportSuccess(firstEventDate?: Date) {
     localStorage.setItem(LS_CAL_KEY, "true");
     setIcsConnected(true);
     setIcsModalOpen(false);
+    // Jump the calendar grid to the month of the first imported event
+    if (firstEventDate && !isNaN(firstEventDate.getTime())) {
+      setCurrentDate(firstEventDate);
+      setActiveTab("academic");
+    }
   }
 
   // Build course color map
