@@ -1,15 +1,16 @@
 import { useState } from "react";
 import { Link } from "wouter";
-import { useCourses, useCreateCourse, useJoinCourse } from "@/hooks/use-courses";
+import { useCourses, useCreateCourse, useJoinCourse, useLeaveCourse } from "@/hooks/use-courses";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
 import { LoadingSpinner } from "@/components/loading";
-import { BookOpen, Plus, Search, Users, ArrowRight, X, Link2, FileText } from "lucide-react";
+import { BookOpen, Plus, Search, Users, ArrowRight, X, Link2, FileText, LogOut } from "lucide-react";
 
 export default function Courses() {
   const { data: courses, isLoading } = useCourses();
   const createCourse = useCreateCourse();
   const joinCourse = useJoinCourse();
+  const leaveCourse = useLeaveCourse();
   
   const [search, setSearch] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -91,7 +92,18 @@ export default function Courses() {
           <h2 className="text-lg font-display font-bold text-foreground mb-4">My Courses</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {myCourses.map(course => (
-              <CourseCard key={course.id} course={course} onJoin={() => {}} isJoining={false} />
+              <CourseCard
+                key={course.id}
+                course={course}
+                onJoin={() => {}}
+                isJoining={false}
+                onLeave={() => {
+                  if (window.confirm(`Leave "${course.name}"? If you created it and no other students are enrolled, it will be deleted.`)) {
+                    leaveCourse.mutate(course.id);
+                  }
+                }}
+                isLeaving={leaveCourse.isPending}
+              />
             ))}
           </div>
         </section>
@@ -131,7 +143,13 @@ export default function Courses() {
   );
 }
 
-function CourseCard({ course, onJoin, isJoining }: { course: any, onJoin: () => void, isJoining: boolean }) {
+function CourseCard({ course, onJoin, isJoining, onLeave, isLeaving }: {
+  course: any;
+  onJoin: () => void;
+  isJoining: boolean;
+  onLeave?: () => void;
+  isLeaving?: boolean;
+}) {
   const hasCanonicalSyllabus = (course.syllabi?.length || 0) > 0;
 
   return (
@@ -168,11 +186,25 @@ function CourseCard({ course, onJoin, isJoining }: { course: any, onJoin: () => 
       )}
       
       {course.isEnrolled ? (
-        <Link href={`/courses/${course.id}`} className="block w-full">
-          <Button variant="outline" className="w-full group-hover:border-primary group-hover:text-primary transition-colors" data-testid={`button-goto-course-${course.id}`}>
-            Go to Course <ArrowRight className="w-4 h-4 ml-2" />
-          </Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link href={`/courses/${course.id}`} className="flex-1">
+            <Button variant="outline" className="w-full group-hover:border-primary group-hover:text-primary transition-colors" data-testid={`button-goto-course-${course.id}`}>
+              Go to Course <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+          </Link>
+          {onLeave && (
+            <Button
+              variant="outline"
+              className="shrink-0 text-muted-foreground hover:text-destructive hover:border-destructive/50 transition-colors"
+              onClick={onLeave}
+              isLoading={isLeaving}
+              title="Leave course"
+              data-testid={`button-leave-course-${course.id}`}
+            >
+              <LogOut className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
       ) : (
         <Button 
           variant="primary"

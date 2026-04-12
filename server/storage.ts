@@ -50,6 +50,7 @@ export interface IStorage {
   getCourse(id: number): Promise<Course | undefined>;
   createCourse(course: InsertCourse, userId: string): Promise<Course>;
   joinCourse(courseId: number, userId: string): Promise<void>;
+  leaveCourse(courseId: number, userId: string): Promise<void>;
   getEnrolledCourses(userId: string): Promise<Course[]>;
   getCourseDetails(courseId: number, userId: string): Promise<CourseResponse | undefined>;
 
@@ -139,6 +140,21 @@ export class DatabaseStorage implements IStorage {
     const [existing] = await db.select().from(courseStudents).where(and(eq(courseStudents.courseId, courseId), eq(courseStudents.userId, userId)));
     if (!existing) {
       await db.insert(courseStudents).values({ courseId, userId });
+    }
+  }
+
+  async leaveCourse(courseId: number, userId: string): Promise<void> {
+    // Remove enrollment
+    await db.delete(courseStudents).where(and(eq(courseStudents.courseId, courseId), eq(courseStudents.userId, userId)));
+    // If no students remain and this user created the course, delete it entirely
+    const remaining = await db.select().from(courseStudents).where(eq(courseStudents.courseId, courseId));
+    if (remaining.length === 0) {
+      const [course] = await db.select().from(courses).where(eq(courses.id, courseId));
+      if (course?.createdBy === userId) {
+        await db.delete(syllabi).where(eq(syllabi.courseId, courseId));
+        await db.delete(assignments).where(eq(assignments.courseId, courseId));
+        await db.delete(courses).where(eq(courses.id, courseId));
+      }
     }
   }
 
@@ -249,7 +265,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTasksByUser(userId: string): Promise<Task[]> {
-    return await db.select().from(tasks).where(eq(tasks.userId, userId)).orderBy(tasks.dueDate);
+    const rows = await db.select().from(tasks).where(eq(tasks.userId, userId)).orderBy(tasks.dueDate);
+    // Strip any corrupted rows where the title is literally "[object Object]"
+    return rows.filter(t => t.title && t.title !== '[object Object]');
   }
 
   async createTask(userId: string, task: InsertTask): Promise<Task> {

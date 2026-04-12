@@ -3,11 +3,12 @@ import { useRoute } from "wouter";
 import { useCourse } from "@/hooks/use-courses";
 import { useAssignments, useCreateAssignment, useDeleteAssignment } from "@/hooks/use-assignments";
 import { useUploadSyllabus, useDeleteSyllabus } from "@/hooks/use-syllabi";
+import { useLeaveCourse } from "@/hooks/use-courses";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
 import { LoadingSpinner } from "@/components/loading";
 import { format } from "date-fns";
-import { FileText, Plus, Trash2, Upload, AlertCircle, X, BookOpen, Sparkles, ExternalLink, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
+import { FileText, Plus, Trash2, Upload, AlertCircle, X, BookOpen, Sparkles, ExternalLink, RefreshCw, ChevronDown, ChevronUp, LogOut } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { buildUrl } from "@shared/routes";
@@ -24,10 +25,11 @@ const PLATFORM_COLORS: Record<string, string> = {
 export default function CourseDetails() {
   const [, params] = useRoute("/courses/:id");
   const courseId = parseInt(params?.id || "0");
-  
+
   const { data: course, isLoading: courseLoading } = useCourse(courseId);
   const { data: assignments, isLoading: assignmentsLoading } = useAssignments(courseId);
-  
+  const leaveCourse = useLeaveCourse();
+
   const [activeTab, setActiveTab] = useState<"syllabus" | "assignments" | "prep">("assignments");
   const [isAdding, setIsAdding] = useState(false);
 
@@ -39,13 +41,30 @@ export default function CourseDetails() {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="bg-primary/5 rounded-3xl p-8 border border-primary/10">
-        <div className="inline-block bg-primary/10 text-primary px-4 py-1.5 rounded-xl text-sm font-bold font-display mb-4">
-          {course.code}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="inline-block bg-primary/10 text-primary px-4 py-1.5 rounded-xl text-sm font-bold font-display mb-4">
+              {course.code}
+            </div>
+            <h1 className="text-4xl md:text-5xl font-display font-bold text-foreground mb-4">{course.name}</h1>
+            <p className="text-lg text-muted-foreground font-medium">
+              Section {course.section} • {course.term} • {course.studentCount} Students Enrolled
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              if (window.confirm(`Leave "${course.name}"? If you created it and no other students are enrolled, it will be deleted.`)) {
+                leaveCourse.mutate(courseId, { onSuccess: () => window.location.href = "/courses" });
+              }
+            }}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-muted-foreground hover:text-destructive border border-border hover:border-destructive/50 rounded-xl transition-colors shrink-0"
+            title="Leave course"
+            data-testid="button-leave-course"
+          >
+            <LogOut className="w-4 h-4" />
+            Leave
+          </button>
         </div>
-        <h1 className="text-4xl md:text-5xl font-display font-bold text-foreground mb-4">{course.name}</h1>
-        <p className="text-lg text-muted-foreground font-medium">
-          Section {course.section} • {course.term} • {course.studentCount} Students Enrolled
-        </p>
       </div>
 
       <div className="flex border-b border-border">

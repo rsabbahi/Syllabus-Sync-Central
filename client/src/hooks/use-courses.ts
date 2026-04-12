@@ -74,3 +74,19 @@ export function useJoinCourse() {
     },
   });
 }
+
+export function useLeaveCourse() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/courses/${id}/enroll`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to leave course");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [api.courses.list.path] });
+    },
+  });
+}

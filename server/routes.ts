@@ -97,15 +97,28 @@ export async function registerRoutes(
     try {
       const userId = req.user.claims.sub;
       const courseId = Number(req.params.id);
-      
+
       const course = await storage.getCourse(courseId);
       if (!course) {
         return res.status(404).json({ message: "Course not found" });
       }
-      
+
       await storage.joinCourse(courseId, userId);
       res.json({ success: true });
     } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Leave (and optionally delete) a course
+  app.delete('/api/courses/:id/enroll', async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const courseId = Number(req.params.id);
+      await storage.leaveCourse(courseId, userId);
+      res.status(204).send();
+    } catch (err) {
+      console.error("Leave course error:", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
