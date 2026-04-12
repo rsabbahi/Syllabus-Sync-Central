@@ -101,6 +101,30 @@ export const assignmentResources = pgTable("assignment_resources", {
   generatedAt: timestamp("generated_at").defaultNow(),
 });
 
+// Calendar integrations — one row per connected provider per user
+export const calendarConnections = pgTable("calendar_connections", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  provider: varchar("provider").notNull(), // "google" | "microsoft" | "apple" | "caldav"
+  accessToken: text("access_token"),       // AES-256-GCM encrypted
+  refreshToken: text("refresh_token"),     // AES-256-GCM encrypted
+  tokenExpiresAt: timestamp("token_expires_at"),
+  displayName: text("display_name"),
+  lastSyncedAt: timestamp("last_synced_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Tracks imported event UIDs for dedup across syncs
+export const calendarImportedEvents = pgTable("calendar_imported_events", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  connectionId: integer("connection_id").references(() => calendarConnections.id),
+  externalId: text("external_id").notNull(), // VEVENT UID or provider event ID
+  taskId: integer("task_id").references(() => tasks.id),
+  importedAt: timestamp("imported_at").defaultNow(),
+});
+
 // --- Zod Schemas ---
 export const insertCourseSchema = createInsertSchema(courses).omit({ id: true, createdBy: true, createdAt: true });
 
@@ -136,13 +160,30 @@ export type UpdateUserProfile = z.infer<typeof updateUserProfileSchema>;
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type Course = typeof courses.$inferSelect;
+export type InsertCourse = typeof courses.$inferInsert;
 export type CourseStudent = typeof courseStudents.$inferSelect;
 export type Syllabus = typeof syllabi.$inferSelect;
 export type Assignment = typeof assignments.$inferSelect;
+// Use flexible types to accommodate both Drizzle (decimal→string) and Zod (→number) outputs
+export type InsertAssignment = {
+  name: string;
+  type: string;
+  dueDate: Date;
+  weight: number | string;
+  maxScore: number | string;
+  courseId?: number;
+};
+export type UpdateAssignment = Partial<InsertAssignment>;
 export type UserGrade = typeof userGrades.$inferSelect;
+export type InsertUserGrade = z.infer<typeof insertUserGradeSchema>;
 export type Task = typeof tasks.$inferSelect;
+export type InsertTask = z.infer<typeof insertTaskSchema>;
+export type UpdateTask = z.infer<typeof updateTaskSchema>;
 export type PrepCache = typeof prepCache.$inferSelect;
 export type AssignmentResources = typeof assignmentResources.$inferSelect;
+export type CalendarConnection = typeof calendarConnections.$inferSelect;
+export type InsertCalendarConnection = typeof calendarConnections.$inferInsert;
+export type CalendarImportedEvent = typeof calendarImportedEvents.$inferSelect;
 
 export type CourseResponse = Course & {
   assignments: Assignment[];

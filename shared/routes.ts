@@ -163,6 +163,64 @@ export const api = {
       method: 'GET' as const,
       path: '/api/calendar/ical' as const,
       responses: { 200: z.string() }
+    },
+    connections: {
+      list: {
+        method: 'GET' as const,
+        path: '/api/calendar/connections' as const,
+        responses: { 200: z.array(z.custom<any>()) }
+      },
+      delete: {
+        method: 'DELETE' as const,
+        path: '/api/calendar/connections/:id' as const,
+        responses: { 204: z.void() }
+      }
+    },
+    google: {
+      connect: {
+        method: 'GET' as const,
+        path: '/api/calendar/google/connect' as const,
+        responses: { 302: z.void() }
+      },
+      callback: {
+        method: 'GET' as const,
+        path: '/api/calendar/google/callback' as const,
+        responses: { 302: z.void() }
+      },
+      sync: {
+        method: 'POST' as const,
+        path: '/api/calendar/google/sync' as const,
+        responses: { 200: z.object({ imported: z.number(), skipped: z.number() }) }
+      }
+    },
+    microsoft: {
+      connect: {
+        method: 'GET' as const,
+        path: '/api/calendar/microsoft/connect' as const,
+        responses: { 302: z.void() }
+      },
+      callback: {
+        method: 'GET' as const,
+        path: '/api/calendar/microsoft/callback' as const,
+        responses: { 302: z.void() }
+      },
+      sync: {
+        method: 'POST' as const,
+        path: '/api/calendar/microsoft/sync' as const,
+        responses: { 200: z.object({ imported: z.number(), skipped: z.number() }) }
+      }
+    },
+    ics: {
+      upload: {
+        method: 'POST' as const,
+        path: '/api/calendar/ics/upload' as const,
+        responses: { 200: z.object({ events: z.array(z.custom<any>()) }) }
+      },
+      confirm: {
+        method: 'POST' as const,
+        path: '/api/calendar/ics/confirm' as const,
+        responses: { 200: z.object({ imported: z.number(), skipped: z.number() }) }
+      }
     }
   },
   syllabi: {

@@ -12,6 +12,21 @@ const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 import OpenAI from "openai";
 import { registerAuthRoutes } from "./replit_integrations/auth";
+import { randomBytes } from "crypto";
+import { encryptToken, decryptToken } from "./lib/crypto";
+import { parseIcsBuffer, parseZipBuffer } from "./services/calendar/icsParser";
+import {
+  getGoogleAuthUrl,
+  exchangeGoogleCode,
+  refreshGoogleToken,
+  fetchGoogleEvents,
+} from "./services/calendar/googleCalendar";
+import {
+  getMicrosoftAuthUrl,
+  exchangeMicrosoftCode,
+  refreshMicrosoftToken,
+  fetchMicrosoftEvents,
+} from "./services/calendar/microsoftCalendar";
 
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -722,6 +737,252 @@ Provide 6 study resources that would help a student complete this assignment.`;
     } catch (err) {
       console.error("Resource generation error:", err);
       res.status(500).json({ message: "Failed to generate resources" });
+    }
+  });
+
+  // ── CALENDAR CONNECTIONS ─────────────────────────────────────────────────
+
+  app.get(api.calendar.connections.list.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const connections = await storage.getCalendarConnections(userId);
+      // Strip tokens before returning to client
+      const safe = connections.map(({ accessToken, refreshToken, ...c }) => c);
+      res.json(safe);
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.delete('/api/calendar/connections/:id', async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const id = Number(req.params.id);
+      const conn = await storage.getCalendarConnection(id);
+      if (!conn || conn.userId !== userId) return res.status(404).json({ message: "Not found" });
+      await storage.deleteCalendarConnection(id);
+      res.status(204).send();
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── GOOGLE CALENDAR OAUTH ────────────────────────────────────────────────
+
+  app.get(api.calendar.google.connect.path, async (req: any, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_REDIRECT_URI) {
+      return res.redirect('/?error=google_not_configured');
+    }
+    const state = randomBytes(16).toString('hex');
+    (req.session as any).calendarOAuthState = state;
+    res.redirect(getGoogleAuthUrl(state));
+  });
+
+  app.get(api.calendar.google.callback.path, async (req: any, res) => {
+    try {
+      const { code, state, error } = req.query as Record<string, string>;
+      if (error) return res.redirect('/calendar?error=' + encodeURIComponent(error));
+
+      const storedState = (req.session as any).calendarOAuthState;
+      if (!storedState || state !== storedState) {
+        return res.redirect('/calendar?error=invalid_state');
+      }
+      delete (req.session as any).calendarOAuthState;
+
+      const userId = req.user.claims.sub;
+      const tokens = await exchangeGoogleCode(code);
+
+      await storage.upsertCalendarConnection({
+        userId,
+        provider: 'google',
+        accessToken: encryptToken(tokens.accessToken),
+        refreshToken: encryptToken(tokens.refreshToken),
+        tokenExpiresAt: tokens.expiresAt,
+        displayName: 'Google Calendar',
+      });
+
+      res.redirect('/calendar?connected=google');
+    } catch (err) {
+      console.error('Google OAuth callback error:', err);
+      res.redirect('/calendar?error=google_auth_failed');
+    }
+  });
+
+  app.post(api.calendar.google.sync.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const connections = await storage.getCalendarConnections(userId);
+      const conn = connections.find(c => c.provider === 'google');
+      if (!conn || !conn.accessToken) {
+        return res.status(404).json({ message: "Google Calendar not connected" });
+      }
+
+      // Refresh token if expired or within 5 minutes of expiry
+      let accessToken = decryptToken(conn.accessToken);
+      if (conn.tokenExpiresAt && conn.tokenExpiresAt.getTime() < Date.now() + 5 * 60 * 1000) {
+        if (!conn.refreshToken) return res.status(401).json({ message: "Token expired, please reconnect" });
+        const refreshed = await refreshGoogleToken(decryptToken(conn.refreshToken));
+        accessToken = refreshed.accessToken;
+        await storage.updateCalendarConnectionTokens(conn.id, {
+          accessToken: encryptToken(refreshed.accessToken),
+          tokenExpiresAt: refreshed.expiresAt,
+        });
+      }
+
+      const events = await fetchGoogleEvents(accessToken);
+      const result = await storage.importEventsAsTasks(userId, conn.id, events);
+
+      await storage.updateCalendarConnectionTokens(conn.id, {
+        accessToken: encryptToken(accessToken),
+        tokenExpiresAt: conn.tokenExpiresAt || new Date(),
+      });
+
+      res.json(result);
+    } catch (err) {
+      console.error('Google sync error:', err);
+      res.status(500).json({ message: "Failed to sync Google Calendar" });
+    }
+  });
+
+  // ── MICROSOFT CALENDAR OAUTH ─────────────────────────────────────────────
+
+  app.get(api.calendar.microsoft.connect.path, async (req: any, res) => {
+    if (!process.env.MICROSOFT_CLIENT_ID || !process.env.MICROSOFT_REDIRECT_URI) {
+      return res.redirect('/calendar?error=microsoft_not_configured');
+    }
+    const state = randomBytes(16).toString('hex');
+    (req.session as any).calendarOAuthState = state;
+    res.redirect(getMicrosoftAuthUrl(state));
+  });
+
+  app.get(api.calendar.microsoft.callback.path, async (req: any, res) => {
+    try {
+      const { code, state, error } = req.query as Record<string, string>;
+      if (error) return res.redirect('/calendar?error=' + encodeURIComponent(error));
+
+      const storedState = (req.session as any).calendarOAuthState;
+      if (!storedState || state !== storedState) {
+        return res.redirect('/calendar?error=invalid_state');
+      }
+      delete (req.session as any).calendarOAuthState;
+
+      const userId = req.user.claims.sub;
+      const tokens = await exchangeMicrosoftCode(code);
+
+      await storage.upsertCalendarConnection({
+        userId,
+        provider: 'microsoft',
+        accessToken: encryptToken(tokens.accessToken),
+        refreshToken: encryptToken(tokens.refreshToken),
+        tokenExpiresAt: tokens.expiresAt,
+        displayName: 'Outlook Calendar',
+      });
+
+      res.redirect('/calendar?connected=microsoft');
+    } catch (err) {
+      console.error('Microsoft OAuth callback error:', err);
+      res.redirect('/calendar?error=microsoft_auth_failed');
+    }
+  });
+
+  app.post(api.calendar.microsoft.sync.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const connections = await storage.getCalendarConnections(userId);
+      const conn = connections.find(c => c.provider === 'microsoft');
+      if (!conn || !conn.accessToken) {
+        return res.status(404).json({ message: "Microsoft Calendar not connected" });
+      }
+
+      let accessToken = decryptToken(conn.accessToken);
+      if (conn.tokenExpiresAt && conn.tokenExpiresAt.getTime() < Date.now() + 5 * 60 * 1000) {
+        if (!conn.refreshToken) return res.status(401).json({ message: "Token expired, please reconnect" });
+        const refreshed = await refreshMicrosoftToken(decryptToken(conn.refreshToken));
+        accessToken = refreshed.accessToken;
+        await storage.updateCalendarConnectionTokens(conn.id, {
+          accessToken: encryptToken(refreshed.accessToken),
+          tokenExpiresAt: refreshed.expiresAt,
+        });
+      }
+
+      const events = await fetchMicrosoftEvents(accessToken);
+      const result = await storage.importEventsAsTasks(userId, conn.id, events);
+      res.json(result);
+    } catch (err) {
+      console.error('Microsoft sync error:', err);
+      res.status(500).json({ message: "Failed to sync Microsoft Calendar" });
+    }
+  });
+
+  // ── ICS / ZIP UPLOAD ─────────────────────────────────────────────────────
+
+  // Step 1: parse and return event list for preview
+  app.post(api.calendar.ics.upload.path, upload.single('file'), async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+      const filename = req.file.originalname.toLowerCase();
+      let events;
+      try {
+        if (filename.endsWith('.zip')) {
+          events = parseZipBuffer(req.file.buffer);
+        } else if (filename.endsWith('.ics')) {
+          events = parseIcsBuffer(req.file.buffer);
+        } else {
+          return res.status(400).json({ message: "File must be .ics or .zip" });
+        }
+      } catch (e: any) {
+        return res.status(422).json({ message: e.message || "Failed to parse calendar file" });
+      }
+
+      // Mark duplicates
+      const existingIds = new Set(await storage.getImportedExternalIds(userId));
+      const preview = events.map(e => ({
+        ...e,
+        startDate: e.startDate.toISOString(),
+        endDate: e.endDate ? e.endDate.toISOString() : null,
+        isDuplicate: existingIds.has(e.externalId),
+      }));
+
+      res.json({ events: preview });
+    } catch (err) {
+      console.error('ICS upload error:', err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Step 2: confirm import — client sends selected events
+  app.post(api.calendar.ics.confirm.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { events } = req.body as {
+        events: Array<{
+          externalId: string;
+          title: string;
+          startDate: string;
+          endDate: string | null;
+          description: string | null;
+          location: string | null;
+        }>;
+      };
+
+      if (!Array.isArray(events)) return res.status(400).json({ message: "events must be an array" });
+
+      const normalized = events.map(e => ({
+        externalId: e.externalId,
+        title: e.title,
+        startDate: new Date(e.startDate),
+        endDate: e.endDate ? new Date(e.endDate) : null,
+        description: e.description,
+        location: e.location,
+      }));
+
+      const result = await storage.importEventsAsTasks(userId, null, normalized);
+      res.json(result);
+    } catch (err) {
+      console.error('ICS confirm error:', err);
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
