@@ -210,6 +210,11 @@ export const api = {
         responses: { 200: z.object({ imported: z.number(), skipped: z.number() }) }
       }
     },
+    imported: {
+      method: 'GET' as const,
+      path: '/api/calendar/imported' as const,
+      responses: { 200: z.array(z.custom<any>()) }
+    },
     ics: {
       upload: {
         method: 'POST' as const,

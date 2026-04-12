@@ -2,6 +2,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { api } from "@shared/routes";
 
+const IMPORTED_EVENTS_KEY = "/api/calendar/imported";
+
 export interface CalendarConnectionSafe {
   id: number;
   userId: string;
@@ -22,6 +24,21 @@ export interface ParsedCalendarEvent {
   isDuplicate: boolean;
 }
 
+/** A calendar event stored directly in the DB (not a task) */
+export interface ImportedCalendarEvent {
+  id: number;
+  userId: string;
+  externalId: string;
+  title: string;
+  startDate: string;   // ISO string from JSON
+  endDate: string | null;
+  description: string | null;
+  location: string | null;
+  importedAt: string | null;
+}
+
+// ── Connections (kept for possible future use) ────────────────────────────
+
 export function useCalendarConnections() {
   return useQuery<CalendarConnectionSafe[]>({
     queryKey: [api.calendar.connections.list.path],
@@ -36,7 +53,7 @@ export function useDeleteCalendarConnection() {
       apiRequest("DELETE", `/api/calendar/connections/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [api.calendar.connections.list.path] });
-      qc.invalidateQueries({ queryKey: [api.tasks.list.path] });
+      qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
     },
   });
 }
@@ -47,7 +64,7 @@ export function useSyncGoogle() {
     mutationFn: () =>
       apiRequest("POST", api.calendar.google.sync.path).then(r => r.json()),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: [api.tasks.list.path] });
+      qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
       qc.invalidateQueries({ queryKey: [api.calendar.connections.list.path] });
     },
   });
@@ -59,11 +76,24 @@ export function useSyncMicrosoft() {
     mutationFn: () =>
       apiRequest("POST", api.calendar.microsoft.sync.path).then(r => r.json()),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: [api.tasks.list.path] });
+      qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
       qc.invalidateQueries({ queryKey: [api.calendar.connections.list.path] });
     },
   });
 }
+
+// ── Imported calendar events ──────────────────────────────────────────────
+
+export function useImportedCalendarEvents() {
+  return useQuery<ImportedCalendarEvent[]>({
+    queryKey: [IMPORTED_EVENTS_KEY],
+    queryFn: () =>
+      fetch(IMPORTED_EVENTS_KEY, { credentials: "include" })
+        .then(r => r.ok ? r.json() : []),
+  });
+}
+
+// ── ICS upload / confirm ──────────────────────────────────────────────────
 
 export function useUploadIcs() {
   return useMutation({
@@ -91,6 +121,9 @@ export function useConfirmIcsImport() {
     mutationFn: (events: ParsedCalendarEvent[]): Promise<{ imported: number; skipped: number }> =>
       apiRequest("POST", api.calendar.ics.confirm.path, { events }).then(r => r.json()),
     onSuccess: () => {
+      // Refresh the imported events list so the calendar grid updates immediately
+      qc.invalidateQueries({ queryKey: [IMPORTED_EVENTS_KEY] });
+      // Also refresh tasks in case there are any old ones being cleaned up
       qc.invalidateQueries({ queryKey: [api.tasks.list.path] });
     },
   });

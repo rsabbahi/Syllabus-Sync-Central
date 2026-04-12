@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useCalendarEvents, downloadIcal, getGoogleCalendarUrl, CalendarEvent } from "@/hooks/use-calendar";
 import { useProfile, useUpdateProfile } from "@/hooks/use-profile";
 import { useTasks } from "@/hooks/use-tasks";
-// Calendar connections hook kept for future use
+import { useImportedCalendarEvents, type ImportedCalendarEvent } from "@/hooks/use-calendar-connections";
 import { IcsImportModal } from "@/components/ics-import-modal";
 import { LoadingSpinner } from "@/components/loading";
 import { Button } from "@/components/button";
@@ -16,22 +16,50 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+// ── Colors ───────────────────────────────────────────────────────────────────
+
 const COURSE_COLORS = [
   "bg-blue-500", "bg-purple-500", "bg-emerald-500", "bg-orange-500",
   "bg-rose-500", "bg-cyan-500", "bg-amber-500", "bg-indigo-500",
 ];
-
 const TASK_COLOR = "bg-slate-400";
+const IMPORTED_COLOR = "bg-violet-500";
 
 const TYPE_BADGE: Record<string, string> = {
-  exam: "bg-red-100 text-red-700", hw: "bg-blue-100 text-blue-700",
-  quiz: "bg-yellow-100 text-yellow-700", paper: "bg-purple-100 text-purple-700",
-  project: "bg-orange-100 text-orange-700", lab: "bg-green-100 text-green-700",
-  reading: "bg-gray-100 text-gray-700", lecture: "bg-teal-100 text-teal-700",
-  discussion: "bg-pink-100 text-pink-700", task: "bg-slate-100 text-slate-700",
+  exam: "bg-red-100 text-red-700",
+  hw: "bg-blue-100 text-blue-700",
+  quiz: "bg-yellow-100 text-yellow-700",
+  paper: "bg-purple-100 text-purple-700",
+  project: "bg-orange-100 text-orange-700",
+  lab: "bg-green-100 text-green-700",
+  reading: "bg-gray-100 text-gray-700",
+  lecture: "bg-teal-100 text-teal-700",
+  discussion: "bg-pink-100 text-pink-700",
+  task: "bg-slate-100 text-slate-700",
+  event: "bg-violet-100 text-violet-700",
 };
 
-// ── Embed URL wizard (legacy / advanced) ─────────────────────────────────────
+// ── Unified event shape ───────────────────────────────────────────────────────
+// All three sources (assignments, tasks, imported) are normalised into this.
+
+type EventSource = "assignment" | "task" | "imported";
+
+interface UnifiedEvent {
+  key: string;           // unique React key
+  id: number;
+  source: EventSource;
+  title: string;
+  type: string;          // badge label
+  date: Date;            // the single display date used for grid/sorting
+  courseId?: number;     // set for assignments
+  courseCode?: string;
+  courseName?: string;
+  weight?: string;
+  location?: string;
+  description?: string;
+}
+
+// ── Embed URL helpers ─────────────────────────────────────────────────────────
 
 type CalType = "google" | "apple" | "outlook";
 
@@ -61,10 +89,10 @@ const INSTRUCTIONS: Record<CalType, { title: string; steps: React.ReactNode[]; p
   google: {
     title: "How to get your Google Calendar embed URL",
     steps: [
-      <>Open <a href="https://calendar.google.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">calendar.google.com</a> → click the <strong className="text-foreground">gear icon</strong> → <strong className="text-foreground">Settings</strong>.</>,
-      <>In the left panel under <strong className="text-foreground">"Settings for my calendars"</strong>, click your calendar.</>,
+      <>Open <a href="https://calendar.google.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">calendar.google.com</a> → gear icon → <strong className="text-foreground">Settings</strong>.</>,
+      <>In the left panel, click your calendar under <strong className="text-foreground">"Settings for my calendars"</strong>.</>,
       <>Scroll to <strong className="text-foreground">"Integrate calendar"</strong> → find <strong className="text-foreground">"Embed code"</strong>.</>,
-      <>Copy the <code className="bg-secondary px-1 py-0.5 rounded text-xs">&lt;iframe&gt;</code> tag or just the <code className="bg-secondary px-1 py-0.5 rounded text-xs">src="..."</code> URL and paste below.</>,
+      <>Copy the <code className="bg-secondary px-1 py-0.5 rounded text-xs">&lt;iframe&gt;</code> or the <code className="bg-secondary px-1 py-0.5 rounded text-xs">src="..."</code> URL and paste below.</>,
     ],
     placeholder: `<iframe src="https://calendar.google.com/calendar/embed?src=..." ...></iframe>\n\nor just the URL:\nhttps://calendar.google.com/calendar/embed?src=...`,
     inputLabel: "Paste your embed code or URL",
@@ -74,7 +102,7 @@ const INSTRUCTIONS: Record<CalType, { title: string; steps: React.ReactNode[]; p
     steps: [
       <>Open <strong className="text-foreground">Calendar</strong> on your Mac or iPhone.</>,
       <>Right-click your calendar → <strong className="text-foreground">Share Calendar</strong> → enable <strong className="text-foreground">Public Calendar</strong>.</>,
-      <>Click <strong className="text-foreground">Copy Link</strong> — the URL starts with <code className="bg-secondary px-1 py-0.5 rounded text-xs">webcal://</code>.</>,
+      <>Click <strong className="text-foreground">Copy Link</strong> — starts with <code className="bg-secondary px-1 py-0.5 rounded text-xs">webcal://</code>.</>,
       <>Paste that link below.</>,
     ],
     placeholder: "webcal://p25-caldav.icloud.com/published/2/...",
@@ -83,7 +111,7 @@ const INSTRUCTIONS: Record<CalType, { title: string; steps: React.ReactNode[]; p
   outlook: {
     title: "How to get your Outlook Calendar embed URL",
     steps: [
-      <>Open <a href="https://outlook.live.com/calendar" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">outlook.live.com/calendar</a> → <strong className="text-foreground">Settings</strong> → <strong className="text-foreground">View all Outlook settings</strong>.</>,
+      <>Open <a href="https://outlook.live.com/calendar" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">outlook.live.com/calendar</a> → Settings → <strong className="text-foreground">View all Outlook settings</strong>.</>,
       <>Go to <strong className="text-foreground">Calendar</strong> → <strong className="text-foreground">Shared calendars</strong>.</>,
       <>Under <strong className="text-foreground">Publish a calendar</strong>, pick your calendar → <strong className="text-foreground">HTML</strong> → <strong className="text-foreground">Publish</strong>.</>,
       <>Copy the <strong className="text-foreground">HTML link</strong> and paste below.</>,
@@ -93,14 +121,14 @@ const INSTRUCTIONS: Record<CalType, { title: string; steps: React.ReactNode[]; p
   },
 };
 
-// localStorage key for tracking whether user has connected a calendar via ICS
 const LS_CAL_KEY = "syllabussync-calendar-connected";
 
-// ── Main Component ────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function Calendar() {
-  const { data: events = [], isLoading } = useCalendarEvents();
+  const { data: assignmentEvents = [], isLoading: eventsLoading } = useCalendarEvents();
   const { data: taskList = [] } = useTasks();
+  const { data: importedEvents = [] } = useImportedCalendarEvents();
   const { data: profile, isLoading: profileLoading } = useProfile();
   const updateProfile = useUpdateProfile();
   const { toast } = useToast();
@@ -112,30 +140,113 @@ export default function Calendar() {
   const [showEmbedWizard, setShowEmbedWizard] = useState(false);
   const [selectedType, setSelectedType] = useState<CalType>("google");
   const [embedInput, setEmbedInput] = useState("");
-  // Track whether user has imported a calendar (ICS import or embed URL)
-  const [icsConnected, setIcsConnected] = useState(() => localStorage.getItem(LS_CAL_KEY) === "true");
+  const [icsConnected, setIcsConnected] = useState(
+    () => localStorage.getItem(LS_CAL_KEY) === "true"
+  );
 
-  // Handle URL params: ?tab=my-calendar and error messages
+  // Handle ?tab=my-calendar URL param
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    const error = params.get("error");
-    if (tab === "my-calendar") {
+    if (params.get("tab") === "my-calendar") {
       setActiveTab("my-calendar");
       window.history.replaceState({}, "", "/calendar");
     }
+    const error = params.get("error");
     if (error) {
       toast({ title: "Connection failed", description: decodeURIComponent(error), variant: "destructive" });
       window.history.replaceState({}, "", "/calendar");
     }
   }, []);
 
-  if (isLoading || profileLoading) return <LoadingSpinner />;
+  // If we have imported events, mark as connected (catches page refresh after import)
+  useEffect(() => {
+    if (importedEvents.length > 0) {
+      localStorage.setItem(LS_CAL_KEY, "true");
+      setIcsConnected(true);
+    }
+  }, [importedEvents.length]);
+
+  if (eventsLoading || profileLoading) return <LoadingSpinner />;
 
   const savedUrl = profile?.googleCalendarEmbedUrl;
   const embedSrc = savedUrl ? toEmbedUrl(savedUrl) : null;
+  const isCalendarConnected = icsConnected || !!savedUrl;
 
-  const handleSaveEmbed = () => {
+  // ── Build course color map ────────────────────────────────────────────────
+  const courseIds = Array.from(new Set(assignmentEvents.map(e => e.courseId)));
+  const courseColorMap: Record<number, string> = {};
+  courseIds.forEach((id, i) => {
+    courseColorMap[id] = COURSE_COLORS[i % COURSE_COLORS.length];
+  });
+
+  // ── Normalise all sources into UnifiedEvent ───────────────────────────────
+
+  const fromAssignments: UnifiedEvent[] = assignmentEvents.map(e => ({
+    key: `assignment-${e.id}`,
+    id: e.id,
+    source: "assignment" as EventSource,
+    title: String(e.title),
+    type: e.type,
+    date: new Date(e.dueDate),
+    courseId: e.courseId,
+    courseCode: e.courseCode,
+    courseName: e.courseName,
+    weight: String(e.weight),
+  }));
+
+  const fromTasks: UnifiedEvent[] = taskList
+    .filter(t => t.dueDate && !t.assignmentId && String(t.title) !== "[object Object]")
+    .map(t => ({
+      key: `task-${t.id}`,
+      id: t.id,
+      source: "task" as EventSource,
+      title: String(t.title),
+      type: "task",
+      date: new Date(t.dueDate as any),
+    }));
+
+  const fromImported: UnifiedEvent[] = importedEvents
+    .filter(e => e.startDate)
+    .map(e => ({
+      key: `imported-${e.id}`,
+      id: e.id,
+      source: "imported" as EventSource,
+      title: String(e.title),
+      type: "event",
+      date: new Date(e.startDate!),
+      location: e.location ?? undefined,
+      description: e.description ?? undefined,
+    }));
+
+  const allEvents: UnifiedEvent[] = [...fromAssignments, ...fromTasks, ...fromImported];
+
+  function colorFor(e: UnifiedEvent): string {
+    if (e.source === "imported") return IMPORTED_COLOR;
+    if (e.source === "task") return TASK_COLOR;
+    return courseColorMap[e.courseId!] ?? COURSE_COLORS[0];
+  }
+
+  // ── Calendar grid ─────────────────────────────────────────────────────────
+  const calStart = startOfWeek(startOfMonth(currentDate));
+  const calEnd = endOfWeek(endOfMonth(currentDate));
+  const days: Date[] = [];
+  let d = calStart;
+  while (d <= calEnd) { days.push(d); d = addDays(d, 1); }
+
+  const getEventsForDay = (day: Date) =>
+    allEvents.filter(e => !isNaN(e.date.getTime()) && isSameDay(e.date, day));
+
+  const selectedEvents = selectedDay ? getEventsForDay(selectedDay) : [];
+
+  const today = new Date();
+  const upcoming = allEvents
+    .filter(e => !isNaN(e.date.getTime()) && e.date >= today)
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .slice(0, 10);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  function handleSaveEmbed() {
     const url = extractEmbedSrc(embedInput);
     if (!url) return;
     updateProfile.mutate({ googleCalendarEmbedUrl: url }, {
@@ -146,83 +257,50 @@ export default function Calendar() {
         setIcsConnected(true);
       },
     });
-  };
+  }
 
-  const handleDisconnectEmbed = () => {
+  function handleDisconnectEmbed() {
     updateProfile.mutate({ googleCalendarEmbedUrl: null }, {
       onSuccess: () => {
-        // Only clear connected flag if there's no ICS import either
-        localStorage.removeItem(LS_CAL_KEY);
-        setIcsConnected(false);
+        if (importedEvents.length === 0) {
+          localStorage.removeItem(LS_CAL_KEY);
+          setIcsConnected(false);
+        }
       },
     });
-  };
+  }
 
   function handleIcsImportSuccess(firstEventDate?: Date) {
     localStorage.setItem(LS_CAL_KEY, "true");
     setIcsConnected(true);
     setIcsModalOpen(false);
-    // Jump the calendar grid to the month of the first imported event
     if (firstEventDate && !isNaN(firstEventDate.getTime())) {
       setCurrentDate(firstEventDate);
       setActiveTab("academic");
     }
   }
 
-  // Build course color map
-  const courseIds = [...new Set(events.map(e => e.courseId))];
-  const courseColorMap: Record<number, string> = {};
-  courseIds.forEach((id, i) => { courseColorMap[id] = COURSE_COLORS[i % COURSE_COLORS.length]; });
-
-  // Merge tasks into calendar events
-  const taskEvents: CalendarEvent[] = taskList
-    .filter(t => t.dueDate && !t.assignmentId) // only personal/imported tasks
-    .map(t => ({
-      id: t.id + 100000, // avoid ID collision with assignments
-      title: t.title,
-      type: "task",
-      dueDate: t.dueDate,
-      courseId: -1,
-      courseName: "Personal",
-      courseCode: "",
-      weight: "0",
-    } as any));
-  const allEvents = [...events, ...taskEvents];
-
-  // Calendar grid
-  const calStart = startOfWeek(startOfMonth(currentDate));
-  const calEnd = endOfWeek(endOfMonth(currentDate));
-  const days: Date[] = [];
-  let d = calStart;
-  while (d <= calEnd) { days.push(d); d = addDays(d, 1); }
-
-  const getEventsForDay = (day: Date) => allEvents.filter(e => isSameDay(new Date(e.dueDate), day));
-  const selectedEvents = selectedDay ? getEventsForDay(selectedDay) : [];
-  const today = new Date();
-  const upcoming = allEvents
-    .filter(e => new Date(e.dueDate) >= today)
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-    .slice(0, 10);
-
   const inst = INSTRUCTIONS[selectedType];
-  const isCalendarConnected = icsConnected || !!savedUrl;
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
+
       {/* Header */}
       <div className="bg-primary/5 rounded-3xl p-8 border border-primary/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-4xl font-display font-bold text-foreground mb-2">Academic Calendar</h1>
           <p className="text-muted-foreground text-lg">All your deadlines in one place.</p>
         </div>
-        <Button variant="outline" onClick={downloadIcal} data-testid="button-download-ical">
+        <Button variant="outline" onClick={downloadIcal}>
           <Download className="w-4 h-4 mr-2" />
           Export .ics
         </Button>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-        {/* Main calendar card */}
+
+        {/* ── Main calendar card ── */}
         <div className="xl:col-span-2 bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
 
           {/* Tab bar */}
@@ -230,37 +308,34 @@ export default function Calendar() {
             <button
               onClick={() => setActiveTab("academic")}
               className={`px-5 py-4 text-sm font-semibold transition-colors border-b-2 -mb-px ${activeTab === "academic" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-              data-testid="tab-academic"
             >
               SyllabusSync
             </button>
             <button
               onClick={() => setActiveTab("my-calendar")}
               className={`px-5 py-4 text-sm font-semibold transition-colors border-b-2 -mb-px flex items-center gap-2 ${activeTab === "my-calendar" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-              data-testid="tab-my-calendar"
             >
               <CalIcon className="w-3.5 h-3.5" />
               My Calendar
               {isCalendarConnected && <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />}
             </button>
 
-            {/* Month nav — academic tab */}
             {activeTab === "academic" && (
               <div className="flex items-center gap-1 ml-auto pr-4">
-                <button onClick={() => setCurrentDate(subMonths(currentDate, 1))} className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground" data-testid="button-prev-month">
+                <button onClick={() => setCurrentDate(subMonths(currentDate, 1))} className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground">
                   <ChevronLeft className="w-4 h-4" />
                 </button>
                 <span className="text-sm font-bold text-foreground px-1 min-w-[110px] text-center">
                   {format(currentDate, "MMMM yyyy")}
                 </span>
-                <button onClick={() => setCurrentDate(addMonths(currentDate, 1))} className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground" data-testid="button-next-month">
+                <button onClick={() => setCurrentDate(addMonths(currentDate, 1))} className="p-2 rounded-xl hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground">
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             )}
           </div>
 
-          {/* ── Academic tab ── */}
+          {/* ── Academic tab — calendar grid ── */}
           {activeTab === "academic" && (
             <>
               <div className="grid grid-cols-7 border-b border-border">
@@ -272,24 +347,20 @@ export default function Calendar() {
                 {days.map((day, i) => {
                   const dayEvents = getEventsForDay(day);
                   const inMonth = isSameMonth(day, currentDate);
-                  const isSelected = selectedDay && isSameDay(day, selectedDay);
+                  const isSelected = !!selectedDay && isSameDay(day, selectedDay);
                   const todayDay = isToday(day);
                   return (
                     <button
                       key={i}
                       onClick={() => setSelectedDay(isSameDay(day, selectedDay!) ? null : day)}
                       className={`min-h-[80px] p-1.5 border-b border-r border-border text-left transition-colors ${!inMonth ? "bg-secondary/30" : "hover:bg-secondary/50"} ${isSelected ? "bg-primary/10 ring-inset ring-2 ring-primary" : ""}`}
-                      data-testid={`day-${format(day, "yyyy-MM-dd")}`}
                     >
                       <span className={`text-sm font-semibold w-7 h-7 flex items-center justify-center rounded-full mb-1 ${todayDay ? "bg-primary text-primary-foreground" : !inMonth ? "text-muted-foreground/40" : "text-foreground"}`}>
                         {format(day, "d")}
                       </span>
                       <div className="space-y-0.5">
                         {dayEvents.slice(0, 2).map(evt => (
-                          <div
-                            key={evt.id}
-                            className={`text-[10px] font-semibold text-white rounded px-1 py-0.5 truncate ${(evt as any).courseId === -1 ? TASK_COLOR : courseColorMap[(evt as any).courseId]}`}
-                          >
+                          <div key={evt.key} className={`text-[10px] font-semibold text-white rounded px-1 py-0.5 truncate ${colorFor(evt)}`}>
                             {evt.title}
                           </div>
                         ))}
@@ -306,9 +377,9 @@ export default function Calendar() {
 
           {/* ── My Calendar tab ── */}
           {activeTab === "my-calendar" && (
-            <div className="p-6 space-y-6" data-testid="section-calendar-import">
+            <div className="p-6 space-y-6">
 
-              {/* ── Connected state ── */}
+              {/* Connected state */}
               {isCalendarConnected && !showEmbedWizard ? (
                 <div className="space-y-4">
                   <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-50 border border-emerald-200">
@@ -316,169 +387,135 @@ export default function Calendar() {
                     <div className="flex-1">
                       <p className="text-sm font-semibold text-emerald-800">Calendar connected</p>
                       <p className="text-xs text-emerald-700 mt-0.5">
-                        {savedUrl ? "Your calendar is embedded below." : "Events from your calendar file have been added as tasks."}
+                        {savedUrl
+                          ? "Your calendar is embedded below."
+                          : `${fromImported.length} event${fromImported.length !== 1 ? "s" : ""} imported from your calendar file.`}
                       </p>
                     </div>
                     <button
-                      onClick={() => {
-                        // Allow changing calendar
-                        if (savedUrl) {
-                          setShowEmbedWizard(true);
-                        } else {
-                          setIcsModalOpen(true);
-                        }
-                      }}
-                      className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2 transition-colors shrink-0"
+                      onClick={() => savedUrl ? setShowEmbedWizard(true) : setIcsModalOpen(true)}
+                      className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2 shrink-0"
                     >
                       Change
                     </button>
                   </div>
 
-                  {/* Embedded calendar if present */}
                   {embedSrc && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <h4 className="text-sm font-semibold text-foreground">Embedded Calendar</h4>
-                        <button
-                          onClick={handleDisconnectEmbed}
-                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors"
-                        >
+                        <button onClick={handleDisconnectEmbed} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors">
                           <X className="w-3 h-3" /> Remove
                         </button>
                       </div>
                       <div style={{ height: 400 }} className="rounded-xl overflow-hidden border border-border">
-                        <iframe src={embedSrc} className="w-full h-full border-0" title="My Calendar" data-testid="external-calendar-iframe" />
+                        <iframe src={embedSrc} className="w-full h-full border-0" title="My Calendar" />
                       </div>
                     </div>
                   )}
 
-                  {/* Re-import more ICS events */}
                   {!savedUrl && (
-                    <button
-                      onClick={() => setIcsModalOpen(true)}
-                      className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors"
-                    >
+                    <button onClick={() => setIcsModalOpen(true)} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors">
                       <Upload className="w-4 h-4" />
                       Import more events
                     </button>
                   )}
                 </div>
-              ) : (
-                /* ── Not connected — show options ── */
+              ) : !showEmbedWizard ? (
+                /* Not connected — show options */
                 <div className="space-y-4">
-                  {!showEmbedWizard && (
-                    <>
+                  <div>
+                    <h3 className="font-display font-bold text-lg text-foreground mb-1">Connect Your Calendar</h3>
+                    <p className="text-sm text-muted-foreground">Import events or embed your calendar here.</p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setIcsModalOpen(true)}
+                      className="flex items-start gap-3 p-4 rounded-xl border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
+                    >
+                      <Upload className="w-6 h-6 text-primary shrink-0 mt-0.5" />
                       <div>
-                        <h3 className="font-display font-bold text-lg text-foreground mb-1">Connect Your Calendar</h3>
-                        <p className="text-sm text-muted-foreground">Import events as tasks or embed your calendar here.</p>
+                        <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Upload .ics / .zip</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">Google Calendar, Apple, Outlook, school LMS</div>
                       </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {/* Upload .ics */}
-                        <button
-                          onClick={() => setIcsModalOpen(true)}
-                          className="flex items-start gap-3 p-4 rounded-xl border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
-                          data-testid="button-connect-ics"
-                        >
-                          <Upload className="w-6 h-6 text-primary shrink-0 mt-0.5" />
-                          <div>
-                            <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Upload .ics / .zip</div>
-                            <div className="text-xs text-muted-foreground mt-0.5">Google Calendar, Apple, Outlook, school LMS</div>
-                          </div>
-                        </button>
-
-                        {/* Embed URL */}
-                        <button
-                          onClick={() => setShowEmbedWizard(true)}
-                          className="flex items-start gap-3 p-4 rounded-xl border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
-                          data-testid="button-connect-embed"
-                        >
-                          <Link className="w-6 h-6 text-muted-foreground shrink-0 mt-0.5" />
-                          <div>
-                            <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Embed URL</div>
-                            <div className="text-xs text-muted-foreground mt-0.5">Paste an embed link to display your calendar</div>
-                          </div>
-                        </button>
+                    </button>
+                    <button
+                      onClick={() => setShowEmbedWizard(true)}
+                      className="flex items-start gap-3 p-4 rounded-xl border border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
+                    >
+                      <Link className="w-6 h-6 text-muted-foreground shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">Embed URL</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">Paste an embed link to display your calendar</div>
                       </div>
-                    </>
-                  )}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
-                  {/* Embed wizard */}
-                  {showEmbedWizard && (
-                    <div className="border border-border rounded-xl p-5 space-y-4 bg-secondary/20">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-semibold text-sm text-foreground">Embed Calendar URL</h4>
-                        <button
-                          onClick={() => setShowEmbedWizard(false)}
-                          className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="flex gap-3 flex-wrap">
-                        {CAL_TYPES.map(t => (
-                          <button
-                            key={t.id}
-                            onClick={() => setSelectedType(t.id)}
-                            className={`px-4 py-2 rounded-xl border-2 font-semibold text-sm transition-all ${selectedType === t.id ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground hover:border-primary/40"}`}
-                            data-testid={`button-cal-type-${t.id}`}
-                          >
-                            {t.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="bg-primary/5 border border-primary/15 rounded-xl p-4 space-y-3">
-                        <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-                          <Info className="w-4 h-4 shrink-0" />
-                          {inst.title}
-                        </div>
-                        <ol className="space-y-2 text-sm text-muted-foreground list-none">
-                          {inst.steps.map((step, i) => (
-                            <li key={i} className="flex gap-3">
-                              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary font-bold text-xs flex items-center justify-center mt-0.5">{i + 1}</span>
-                              <span>{step}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      </div>
-
-                      <div className="space-y-3">
-                        <label className="text-sm font-semibold text-foreground">{inst.inputLabel}</label>
-                        <textarea
-                          className="w-full h-24 rounded-xl border border-border bg-secondary/40 px-4 py-3 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                          placeholder={inst.placeholder}
-                          value={embedInput}
-                          onChange={e => setEmbedInput(e.target.value)}
-                          data-testid="input-embed-code"
-                        />
-                        <Button
-                          variant="primary"
-                          onClick={handleSaveEmbed}
-                          disabled={!embedInput.trim() || updateProfile.isPending}
-                          data-testid="button-save-embed"
-                        >
-                          <Check className="w-4 h-4 mr-2" />
-                          {updateProfile.isPending ? "Connecting..." : "Connect Calendar"}
-                        </Button>
-                      </div>
+              {/* Embed wizard (shown in both connected and not-connected states) */}
+              {showEmbedWizard && (
+                <div className="border border-border rounded-xl p-5 space-y-4 bg-secondary/20">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold text-sm text-foreground">Embed Calendar URL</h4>
+                    <button onClick={() => setShowEmbedWizard(false)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="flex gap-3 flex-wrap">
+                    {CAL_TYPES.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelectedType(t.id)}
+                        className={`px-4 py-2 rounded-xl border-2 font-semibold text-sm transition-all ${selectedType === t.id ? "border-primary bg-primary/5 text-primary" : "border-border text-muted-foreground hover:border-primary/40"}`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="bg-primary/5 border border-primary/15 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+                      <Info className="w-4 h-4 shrink-0" />
+                      {inst.title}
                     </div>
-                  )}
+                    <ol className="space-y-2 text-sm text-muted-foreground list-none">
+                      {inst.steps.map((step, i) => (
+                        <li key={i} className="flex gap-3">
+                          <span className="shrink-0 w-5 h-5 rounded-full bg-primary/15 text-primary font-bold text-xs flex items-center justify-center mt-0.5">{i + 1}</span>
+                          <span>{step}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-sm font-semibold text-foreground">{inst.inputLabel}</label>
+                    <textarea
+                      className="w-full h-24 rounded-xl border border-border bg-secondary/40 px-4 py-3 text-sm font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                      placeholder={inst.placeholder}
+                      value={embedInput}
+                      onChange={e => setEmbedInput(e.target.value)}
+                    />
+                    <Button variant="primary" onClick={handleSaveEmbed} disabled={!embedInput.trim() || updateProfile.isPending}>
+                      <Check className="w-4 h-4 mr-2" />
+                      {updateProfile.isPending ? "Connecting..." : "Connect Calendar"}
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* Sidebar */}
+        {/* ── Right sidebar ── */}
         <div className="space-y-6">
-          {courseIds.length > 0 && (
+
+          {/* Legend */}
+          {(courseIds.length > 0 || fromTasks.length > 0 || fromImported.length > 0) && (
             <div className="bg-card rounded-2xl border border-border p-5 shadow-sm">
-              <h3 className="font-display font-bold text-lg mb-4">Courses</h3>
+              <h3 className="font-display font-bold text-lg mb-4">Legend</h3>
               <div className="space-y-2">
                 {courseIds.map(id => {
-                  const evt = events.find(e => e.courseId === id);
+                  const evt = assignmentEvents.find(e => e.courseId === id);
                   return (
                     <div key={id} className="flex items-center gap-3">
                       <div className={`w-3 h-3 rounded-full ${courseColorMap[id]}`} />
@@ -487,39 +524,47 @@ export default function Calendar() {
                     </div>
                   );
                 })}
-                {taskEvents.length > 0 && (
+                {fromTasks.length > 0 && (
                   <div className="flex items-center gap-3">
                     <div className={`w-3 h-3 rounded-full ${TASK_COLOR}`} />
                     <span className="text-sm font-medium text-foreground">Personal tasks</span>
+                  </div>
+                )}
+                {fromImported.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <div className={`w-3 h-3 rounded-full ${IMPORTED_COLOR}`} />
+                    <span className="text-sm font-medium text-foreground">Calendar events</span>
                   </div>
                 )}
               </div>
             </div>
           )}
 
+          {/* Selected day panel */}
           {selectedDay && activeTab === "academic" && (
             <div className="bg-card rounded-2xl border border-border p-5 shadow-sm">
               <h3 className="font-display font-bold text-lg mb-4">{format(selectedDay, "MMMM d")}</h3>
               {selectedEvents.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No assignments due.</p>
+                <p className="text-muted-foreground text-sm">Nothing due.</p>
               ) : (
                 <div className="space-y-3">
                   {selectedEvents.map(evt => (
-                    <EventCard key={evt.id} event={evt} color={(evt as any).courseId === -1 ? TASK_COLOR : courseColorMap[(evt as any).courseId]} />
+                    <EventCard key={evt.key} event={evt} color={colorFor(evt)} />
                   ))}
                 </div>
               )}
             </div>
           )}
 
+          {/* Upcoming deadlines */}
           <div className="bg-card rounded-2xl border border-border p-5 shadow-sm">
-            <h3 className="font-display font-bold text-lg mb-4">Upcoming Deadlines</h3>
+            <h3 className="font-display font-bold text-lg mb-4">Upcoming</h3>
             {upcoming.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No upcoming assignments.</p>
+              <p className="text-muted-foreground text-sm">Nothing upcoming.</p>
             ) : (
               <div className="space-y-3">
                 {upcoming.map(evt => (
-                  <EventCard key={evt.id} event={evt} color={(evt as any).courseId === -1 ? TASK_COLOR : courseColorMap[(evt as any).courseId]} compact />
+                  <EventCard key={evt.key} event={evt} color={colorFor(evt)} compact />
                 ))}
               </div>
             )}
@@ -532,27 +577,53 @@ export default function Calendar() {
   );
 }
 
-function EventCard({ event, color, compact = false }: { event: CalendarEvent; color: string; compact?: boolean }) {
-  const badge = TYPE_BADGE[event.type] || "bg-gray-100 text-gray-700";
-  const isTask = (event as any).courseId === -1;
+// ── Event card (shared for grid detail + upcoming list) ───────────────────────
+
+function EventCard({ event, color, compact = false }: { event: UnifiedEvent; color: string; compact?: boolean }) {
+  const badge = TYPE_BADGE[event.type] ?? "bg-gray-100 text-gray-700";
+  const isAssignment = event.source === "assignment";
+
+  // Build a CalendarEvent shape only for assignments (needed for Google Calendar URL)
+  const calEvt = isAssignment ? {
+    id: event.id,
+    title: event.title,
+    type: event.type,
+    dueDate: event.date.toISOString(),
+    courseId: event.courseId!,
+    courseName: event.courseName!,
+    courseCode: event.courseCode!,
+    weight: Number(event.weight ?? 0),
+  } as CalendarEvent : null;
+
   return (
-    <div className={`rounded-xl border border-border bg-background p-3 ${compact ? "space-y-1" : "space-y-2"}`} data-testid={`event-card-${event.id}`}>
+    <div className={`rounded-xl border border-border bg-background p-3 ${compact ? "space-y-1" : "space-y-2"}`}>
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${color}`} />
-          <span className={`font-semibold text-foreground ${compact ? "text-xs" : "text-sm"}`}>{event.title}</span>
+          <span className={`font-semibold text-foreground truncate ${compact ? "text-xs" : "text-sm"}`}>
+            {event.title}
+          </span>
         </div>
-        {!isTask && (
-          <a href={getGoogleCalendarUrl(event)} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary transition-colors shrink-0" title="Add to Google Calendar">
+        {calEvt && (
+          <a href={getGoogleCalendarUrl(calEvt)} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary transition-colors shrink-0" title="Add to Google Calendar">
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
         )}
       </div>
       <div className="flex items-center gap-2 flex-wrap">
         <span className={`text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badge}`}>{event.type}</span>
-        {!isTask && <span className="text-xs text-muted-foreground">{event.courseCode}</span>}
-        {!compact && <span className="text-xs text-muted-foreground">Due {format(new Date(event.dueDate), "MMM d, h:mm a")}</span>}
-        {compact && <span className="text-xs text-muted-foreground">{format(new Date(event.dueDate), "MMM d")}</span>}
+        {isAssignment && event.courseCode && (
+          <span className="text-xs text-muted-foreground">{event.courseCode}</span>
+        )}
+        {event.location && !compact && (
+          <span className="text-xs text-muted-foreground truncate">{event.location}</span>
+        )}
+        {compact
+          ? <span className="text-xs text-muted-foreground">{format(event.date, "MMM d")}</span>
+          : <span className="text-xs text-muted-foreground">
+              {event.source === "assignment" ? "Due " : ""}{format(event.date, "MMM d, h:mm a")}
+            </span>
+        }
       </div>
     </div>
   );

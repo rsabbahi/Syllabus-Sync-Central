@@ -837,7 +837,7 @@ Provide 6 study resources that would help a student complete this assignment.`;
       }
 
       const events = await fetchGoogleEvents(accessToken);
-      const result = await storage.importEventsAsTasks(userId, conn.id, events);
+      const result = await storage.importCalendarEvents(userId, conn.id, events);
       await storage.touchCalendarConnection(conn.id);
       res.json(result);
     } catch (err) {
@@ -915,7 +915,7 @@ Provide 6 study resources that would help a student complete this assignment.`;
       }
 
       const events = await fetchMicrosoftEvents(accessToken);
-      const result = await storage.importEventsAsTasks(userId, conn.id, events);
+      const result = await storage.importCalendarEvents(userId, conn.id, events);
       await storage.touchCalendarConnection(conn.id);
       res.json(result);
     } catch (err) {
@@ -926,7 +926,19 @@ Provide 6 study resources that would help a student complete this assignment.`;
 
   // ── ICS / ZIP UPLOAD ─────────────────────────────────────────────────────
 
-  // Step 1: parse and return event list for preview
+  // Fetch all imported calendar events for the current user
+  app.get('/api/calendar/imported', async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const events = await storage.getCalendarImportedEvents(userId);
+      res.json(events);
+    } catch (err) {
+      console.error('Fetch imported events error:', err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Step 1: parse file and return event list for preview
   app.post(api.calendar.ics.upload.path, upload.single('file'), async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -946,12 +958,15 @@ Provide 6 study resources that would help a student complete this assignment.`;
         return res.status(422).json({ message: e.message || "Failed to parse calendar file" });
       }
 
-      // Mark duplicates
+      // Mark duplicates based on already-imported externalIds
       const existingIds = new Set(await storage.getImportedExternalIds(userId));
       const preview = events.map(e => ({
-        ...e,
+        externalId: e.externalId,
+        title: e.title,
         startDate: e.startDate.toISOString(),
         endDate: e.endDate ? e.endDate.toISOString() : null,
+        description: e.description,
+        location: e.location,
         isDuplicate: existingIds.has(e.externalId),
       }));
 
@@ -962,7 +977,7 @@ Provide 6 study resources that would help a student complete this assignment.`;
     }
   });
 
-  // Step 2: confirm import — client sends selected events
+  // Step 2: confirm import — events stored directly, NOT as tasks
   app.post(api.calendar.ics.confirm.path, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -979,16 +994,19 @@ Provide 6 study resources that would help a student complete this assignment.`;
 
       if (!Array.isArray(events)) return res.status(400).json({ message: "events must be an array" });
 
+      // Clean up any old corrupt tasks created by the previous architecture
+      await storage.cleanupOldCalendarTasks(userId);
+
       const normalized = events.map(e => ({
         externalId: e.externalId,
         title: e.title,
         startDate: new Date(e.startDate),
         endDate: e.endDate ? new Date(e.endDate) : null,
-        description: e.description,
-        location: e.location,
+        description: e.description ?? null,
+        location: e.location ?? null,
       }));
 
-      const result = await storage.importEventsAsTasks(userId, null, normalized);
+      const result = await storage.importCalendarEvents(userId, null, normalized);
       res.json(result);
     } catch (err) {
       console.error('ICS confirm error:', err);

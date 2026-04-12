@@ -13,16 +13,42 @@ export interface NormalizedEvent {
 }
 
 /**
- * node-ical sometimes returns text fields as { val: string, params: {...} }
- * when the ICS property has parameters (e.g. SUMMARY;LANGUAGE=en:CS 101 Exam).
- * This helper safely extracts the plain string value in either case.
+ * Safely extract a plain string from any value node-ical might hand back.
+ *
+ * node-ical can return text properties in several forms:
+ *   - plain string  →  "CS 101 Lecture"
+ *   - parameterised object  →  { val: "CS 101 Lecture", params: { LANGUAGE: "en" } }
+ *   - nested object  →  { params: {...}, val: { val: "..." } }
+ *   - array  →  ["CS 101 Lecture", { params: {...} }]
+ *
+ * String() on an object yields "[object Object]", which is the bug we're fixing.
  */
 function extractText(val: any): string {
-  if (!val) return '';
+  if (!val && val !== 0) return '';
+
+  // Plain string — most common case
   if (typeof val === 'string') return val.trim();
-  if (typeof val === 'object' && val !== null && 'val' in val)
-    return String(val.val).trim();
-  return String(val).trim();
+
+  // Array — take first element
+  if (Array.isArray(val)) return extractText(val[0]);
+
+  if (typeof val === 'object' && val !== null) {
+    // node-ical parameterised form: { val: "...", params: {...} }
+    if ('val' in val) return extractText(val.val);
+
+    // Some parsers use 'value'
+    if ('value' in val) return extractText(val.value);
+
+    // Fallback: find the first own string-valued key that isn't 'type'/'params'
+    for (const k of Object.keys(val)) {
+      if (k === 'params' || k === 'type') continue;
+      if (typeof val[k] === 'string' && val[k].length > 0) return val[k].trim();
+    }
+  }
+
+  // Last resort — convert but guard against the useless "[object Object]"
+  const s = String(val);
+  return s === '[object Object]' ? '' : s.trim();
 }
 
 export function parseIcsBuffer(buffer: Buffer): NormalizedEvent[] {
@@ -54,11 +80,12 @@ export function parseIcsBuffer(buffer: Buffer): NormalizedEvent[] {
     const rawEnd = event.end;
     const end = rawEnd ? new Date(rawEnd) : null;
 
-    const uid = String(event.uid || `${extractText(event.summary) || 'event'}:${start.toISOString()}`);
+    const titleText = extractText(event.summary) || 'Untitled Event';
+    const uid = extractText(event.uid) || `${titleText}:${start.toISOString()}`;
 
     events.push({
       externalId: uid,
-      title: extractText(event.summary) || 'Untitled Event',
+      title: titleText,
       startDate: start,
       endDate: end && !isNaN(end.getTime()) ? end : null,
       description: extractText(event.description) || null,
@@ -80,7 +107,8 @@ export function parseZipBuffer(buffer: Buffer): NormalizedEvent[] {
   const events: NormalizedEvent[] = [];
 
   for (const entry of zip.getEntries()) {
-    if (!entry.isDirectory && entry.entryName.toLowerCase().endsWith('.ics')) {
+    const name = entry.entryName.toLowerCase();
+    if (!entry.isDirectory && (name.endsWith('.ics') || name.endsWith('.ical'))) {
       try {
         events.push(...parseIcsBuffer(entry.getData()));
       } catch (e) {

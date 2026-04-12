@@ -115,13 +115,17 @@ export const calendarConnections = pgTable("calendar_connections", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Tracks imported event UIDs for dedup across syncs
+// Stores imported calendar events directly — NOT as tasks
 export const calendarImportedEvents = pgTable("calendar_imported_events", {
   id: serial("id").primaryKey(),
   userId: varchar("user_id").notNull().references(() => users.id),
   connectionId: integer("connection_id").references(() => calendarConnections.id),
   externalId: text("external_id").notNull(), // VEVENT UID or provider event ID
-  taskId: integer("task_id").references(() => tasks.id),
+  title: text("title").notNull().default("Untitled Event"),
+  startDate: timestamp("start_date"), // nullable for backward compat with old rows
+  endDate: timestamp("end_date"),
+  description: text("description"),
+  location: text("location"),
   importedAt: timestamp("imported_at").defaultNow(),
 });
 
@@ -184,6 +188,7 @@ export type AssignmentResources = typeof assignmentResources.$inferSelect;
 export type CalendarConnection = typeof calendarConnections.$inferSelect;
 export type InsertCalendarConnection = typeof calendarConnections.$inferInsert;
 export type CalendarImportedEvent = typeof calendarImportedEvents.$inferSelect;
+export type InsertCalendarImportedEvent = typeof calendarImportedEvents.$inferInsert;
 
 export type CourseResponse = Course & {
   assignments: Assignment[];
