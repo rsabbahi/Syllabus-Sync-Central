@@ -10,6 +10,7 @@ import multer from "multer";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
 import OpenAI from "openai";
 import { registerAuthRoutes } from "./replit_integrations/auth";
 import { randomBytes } from "crypto";
@@ -375,14 +376,52 @@ export async function registerRoutes(
         return res.status(400).json({ message: "No file uploaded" });
       }
 
+      // ── STEP 0: Detect file type ────────────────────────────────────────────
+      // Use BOTH the file extension AND magic bytes (buffer header) because
+      // browsers often send incorrect MIME types.
+      const fileName = (req.file.originalname || "").toLowerCase();
+      const ext = fileName.substring(fileName.lastIndexOf("."));
+      const buf = req.file.buffer;
+
+      type FileKind = "pdf" | "docx" | "txt" | "unknown";
+      let fileKind: FileKind = "unknown";
+
+      // Magic-byte detection
+      if (buf.length >= 4) {
+        if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) {
+          fileKind = "pdf"; // %PDF
+        } else if (buf[0] === 0x50 && buf[1] === 0x4B && buf[2] === 0x03 && buf[3] === 0x04) {
+          fileKind = "docx"; // PK.. (ZIP-based — DOCX, PPTX, etc.)
+        }
+      }
+
+      // Fallback to extension if magic bytes inconclusive
+      if (fileKind === "unknown") {
+        if (ext === ".pdf") fileKind = "pdf";
+        else if (ext === ".docx" || ext === ".doc") fileKind = "docx";
+        else if (ext === ".txt" || ext === ".text" || ext === ".md" || ext === ".rtf") fileKind = "txt";
+      }
+
+      // Final fallback: check MIME type
+      if (fileKind === "unknown") {
+        const mime = (req.file.mimetype || "").toLowerCase();
+        if (mime.includes("pdf")) fileKind = "pdf";
+        else if (mime.includes("word") || mime.includes("officedocument")) fileKind = "docx";
+        else if (mime.includes("text/")) fileKind = "txt";
+      }
+
+      if (fileKind === "unknown") {
+        return res.status(400).json({
+          message: `Unsupported file type "${ext || req.file.mimetype}". Please upload a PDF, DOCX, or TXT file.`,
+        });
+      }
+
+      console.log(`[Syllabus] File detected: ${fileKind} (ext=${ext}, mime=${req.file.mimetype}, size=${buf.length})`);
+
       const today = new Date();
       const currentYear = today.getFullYear();
 
       // ── Shared extraction prompt ────────────────────────────────────────────
-      // Used by both Gemini (which receives the raw PDF) and GPT-4o (which
-      // receives extracted text). Gemini is the preferred path because it sees
-      // the actual document layout including tables, multi-column text, and
-      // scanned/image content. GPT-4o is used when no Gemini key is present.
 
       const EXTRACTION_PROMPT = `You are an expert academic syllabus parser with 20 years of experience reading every type of university syllabus. Your task: extract EVERY assignment, deadline, exam, quiz, homework, project, lab, reading, and due date from this syllabus — including anything that repeats on a schedule.
 
@@ -489,18 +528,51 @@ ABSOLUTE RULES:
       let rawTextForStorage = "";
 
       // ── PATH A: Gemini 1.5 Pro — sees the raw PDF directly ─────────────────
-      // Gemini receives the actual PDF bytes so it can see tables, columns,
-      // scanned content, and complex formatting — far superior to plain text.
-      // This is the PRIMARY path.
+      // For PDFs: Gemini receives the actual bytes so it can see tables, columns,
+      // scanned content, and complex formatting. For DOCX/TXT: we extract text
+      // first and send it as part of the prompt (Gemini doesn't support DOCX natively).
       let geminiSucceeded = false;
 
       if (process.env.Syllabus_API_KEY) {
         try {
-          console.log("[Syllabus] PATH A: Sending raw PDF to Gemini 1.5 Pro...");
-          const base64Pdf = req.file.buffer.toString("base64");
+          console.log(`[Syllabus] PATH A: Gemini extraction (fileKind=${fileKind})...`);
 
-          // Try Gemini 2.0 Flash first (faster, cheaper, still very capable)
-          // Fall back to 1.5 Pro if Flash fails
+          // For non-PDF files, extract text first so Gemini gets clean content
+          let preExtractedText = "";
+          if (fileKind === "docx") {
+            try {
+              const docResult = await mammoth.extractRawText({ buffer: buf });
+              preExtractedText = docResult.value || "";
+              console.log(`[Syllabus] mammoth extracted ${preExtractedText.length} chars from DOCX`);
+            } catch (docErr) {
+              console.warn("[Syllabus] mammoth failed:", docErr);
+            }
+          } else if (fileKind === "txt") {
+            preExtractedText = buf.toString("utf-8");
+            console.log(`[Syllabus] Read ${preExtractedText.length} chars from TXT`);
+          }
+
+          // Build Gemini request parts
+          const geminiParts: any[] = [];
+
+          if (fileKind === "pdf") {
+            // Send raw PDF — Gemini can see tables, layouts, even scanned content
+            geminiParts.push({
+              inline_data: {
+                mime_type: "application/pdf",
+                data: buf.toString("base64"),
+              },
+            });
+            geminiParts.push({ text: EXTRACTION_PROMPT });
+          } else {
+            // For DOCX/TXT: send extracted text with prompt
+            const textForGemini = preExtractedText.substring(0, 60000);
+            geminiParts.push({
+              text: EXTRACTION_PROMPT +
+                `\n\n═══════════════════════════════════════════════\nSYLLABUS TEXT:\n═══════════════════════════════════════════════\n${textForGemini}`,
+            });
+          }
+
           const geminiModels = ["gemini-2.0-flash", "gemini-1.5-pro"];
           let geminiResult: string | null = null;
 
@@ -513,17 +585,7 @@ ABSOLUTE RULES:
                   "x-goog-api-key": process.env.Syllabus_API_KEY,
                 },
                 body: JSON.stringify({
-                  contents: [{
-                    parts: [
-                      {
-                        inline_data: {
-                          mime_type: "application/pdf",
-                          data: base64Pdf,
-                        },
-                      },
-                      { text: EXTRACTION_PROMPT },
-                    ],
-                  }],
+                  contents: [{ parts: geminiParts }],
                   generationConfig: {
                     temperature: 0.1,
                     responseMimeType: "application/json",
@@ -561,7 +623,9 @@ ABSOLUTE RULES:
 
             const extractedAssignments: any[] = parsed.assignments || parsed.items || [];
             parsedContent = parsed;
-            rawTextForStorage = `[Extracted via Gemini Vision — ${extractedAssignments.length} assignments found]`;
+            rawTextForStorage = preExtractedText
+              ? preExtractedText.substring(0, 50000)
+              : `[Extracted via Gemini Vision — ${extractedAssignments.length} assignments found]`;
 
             console.log(`[Syllabus] Gemini extracted ${extractedAssignments.length} assignments`);
 
@@ -583,27 +647,44 @@ ABSOLUTE RULES:
         }
       }
 
-      // ── PATH B: pdf-parse → GPT-4o — used when Gemini key is absent ────────
-      // Also used as a fallback if Gemini returned 0 assignments.
+      // ── PATH B: text extraction → GPT-4o ──────────────────────────────────
+      // Used when Gemini key is absent, or Gemini returned 0 assignments.
       if (!geminiSucceeded) {
-        console.log("[Syllabus] PATH B: pdf-parse + GPT-4o extraction...");
+        console.log(`[Syllabus] PATH B: text extraction + GPT-4o (fileKind=${fileKind})...`);
 
-        // Extract text from PDF
+        // Extract text based on file type
         let text = "";
-        try {
-          const pdfData = await pdfParse(req.file.buffer);
-          text = pdfData.text || "";
-          rawTextForStorage = text.substring(0, 50000);
-          console.log(`[Syllabus] pdf-parse: ${text.length} characters`);
-        } catch (pdfErr) {
-          console.error("[Syllabus] pdf-parse failed:", pdfErr);
+
+        if (fileKind === "pdf") {
+          try {
+            const pdfData = await pdfParse(buf);
+            text = pdfData.text || "";
+            console.log(`[Syllabus] pdf-parse: ${text.length} characters`);
+          } catch (pdfErr) {
+            console.error("[Syllabus] pdf-parse failed:", pdfErr);
+          }
+        } else if (fileKind === "docx") {
+          try {
+            const docResult = await mammoth.extractRawText({ buffer: buf });
+            text = docResult.value || "";
+            console.log(`[Syllabus] mammoth: ${text.length} characters from DOCX`);
+          } catch (docErr) {
+            console.error("[Syllabus] mammoth DOCX extraction failed:", docErr);
+          }
+        } else if (fileKind === "txt") {
+          text = buf.toString("utf-8");
+          console.log(`[Syllabus] Plain text: ${text.length} characters`);
         }
 
+        rawTextForStorage = text.substring(0, 50000);
+
         if (text.trim().length < 100) {
-          // PDF has no readable text — scanned image, need Gemini
-          await storage.addSyllabus(courseId, userId, "local-upload", "scanned-pdf", null);
+          await storage.addSyllabus(courseId, userId, "local-upload", rawTextForStorage || "no-text", null);
+          const hint = fileKind === "pdf"
+            ? "This PDF may be a scanned image with no readable text. Try a text-based PDF, or add a Google AI key (Syllabus_API_KEY) in Replit Secrets to enable OCR."
+            : `Could not extract enough text from this ${fileKind.toUpperCase()} file.`;
           return res.status(422).json({
-            message: "This PDF appears to be a scanned image with no readable text. To process it automatically, a Google AI key (Syllabus_API_KEY) must be configured in Replit Secrets. Until then, please add your assignments manually using the '+ Add Assignment' button.",
+            message: `${hint} You can also add assignments manually using the '+ Add Assignment' button.`,
           });
         }
 

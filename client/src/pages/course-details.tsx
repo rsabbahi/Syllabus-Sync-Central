@@ -474,7 +474,7 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
         <div className="max-w-md mx-auto flex items-center gap-4">
           <input 
             type="file" 
-            accept="application/pdf"
+            accept="application/pdf,.pdf,.docx,.doc,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
             onChange={e => setFile(e.target.files?.[0] || null)}
             className="flex-1 block w-full text-sm text-slate-500 file:mr-4 file:py-3 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-primary/90 file:cursor-pointer file:transition-colors bg-secondary rounded-xl"
           />
