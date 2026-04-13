@@ -41,10 +41,24 @@ const execAsync = promisify(exec);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+let _openaiClient: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (!_openaiClient) {
+    const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error("No OpenAI API key configured. Please set OPENAI_API_KEY.");
+    _openaiClient = new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+  }
+  return _openaiClient;
+}
+// Proxy object so existing `openai.chat.completions.create(...)` call sites work unchanged
+const openai = {
+  chat: {
+    completions: {
+      create: (...args: Parameters<OpenAI["chat"]["completions"]["create"]>) =>
+        getOpenAI().chat.completions.create(...args),
+    },
+  },
+};
 
 // ── Syllabus assignment helpers ──────────────────────────────────────────────
 const VALID_TYPES = ["exam","hw","paper","project","quiz","lab","reading","discussion","presentation","lecture"];
