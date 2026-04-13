@@ -1,5 +1,10 @@
 import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+// CJS-safe require: import.meta.url works in ESM dev, but esbuild empties it
+// when bundling to CJS. Fallback to __filename (available in CJS) or cwd.
+const _requireUrl = typeof import.meta?.url === "string" && import.meta.url
+  ? import.meta.url
+  : (typeof __filename !== "undefined" ? `file://${__filename}` : `file://${process.cwd()}/server/services/calendar/icsParser.ts`);
+const require = createRequire(_requireUrl);
 const ical = require('node-ical');
 const AdmZip = require('adm-zip');
 

@@ -93,7 +93,7 @@ export default function GradeTracker() {
                                 if (val === "") return;
                                 upsertGrade.mutate({
                                   assignmentId: item.assignment.id,
-                                  score: Number(val)
+                                  score: val
                                 });
                               }}
                             />

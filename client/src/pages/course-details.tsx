@@ -267,8 +267,8 @@ function AssignmentsTab({ courseId, assignments, forceAdd }: { courseId: number,
     createAssignment.mutate({
       ...formData,
       dueDate: new Date(formData.dueDate),
-      weight: Number(formData.weight),
-      maxScore: Number(formData.maxScore)
+      weight: formData.weight,
+      maxScore: formData.maxScore
     }, {
       onSuccess: () => {
         setIsAdding(false);
@@ -474,7 +474,7 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
         <div className="max-w-md mx-auto flex items-center gap-4">
           <input 
             type="file" 
-            accept="application/pdf,.pdf,.docx,.doc,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
+            accept="application/pdf,.pdf,.docx,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
             onChange={e => setFile(e.target.files?.[0] || null)}
             className="flex-1 block w-full text-sm text-slate-500 file:mr-4 file:py-3 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-primary/90 file:cursor-pointer file:transition-colors bg-secondary rounded-xl"
           />
@@ -495,7 +495,7 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
             <AlertCircle className="w-5 h-5 text-destructive" />
             <h4 className="text-destructive font-bold text-lg">Parsing Failed</h4>
           </div>
-          <p className="text-destructive/80 mb-4">{(upload.error as any)?.response?.data?.message || "We couldn't extract assignments from this document."}</p>
+          <p className="text-destructive/80 mb-4">{upload.error?.message || "We couldn't extract assignments from this document."}</p>
           <Button variant="outline" onClick={onManualAdd}>
             Add Manually
           </Button>

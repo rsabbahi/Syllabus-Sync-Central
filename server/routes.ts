@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
+import { storage, IStorage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { eq, inArray } from "drizzle-orm";
@@ -8,8 +8,14 @@ import { assignments, tasks, userGrades, updateUserProfileSchema } from "@shared
 import { isAuthenticated, setupAuth } from "./replit_integrations/auth";
 import multer from "multer";
 import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+import { fileURLToPath } from "url";
+// CJS-safe require: import.meta.url works in ESM dev, but esbuild empties it
+// when bundling to CJS. Fallback to __filename (available in CJS) or cwd.
+const _requireUrl = typeof import.meta?.url === "string" && import.meta.url
+  ? import.meta.url
+  : (typeof __filename !== "undefined" ? `file://${__filename}` : `file://${process.cwd()}/server/routes.ts`);
+const require = createRequire(_requireUrl);
+const { PDFParse, PasswordException, InvalidPDFException } = require("pdf-parse");
 const mammoth = require("mammoth");
 import OpenAI from "openai";
 import { registerAuthRoutes } from "./replit_integrations/auth";
@@ -40,20 +46,51 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
-// ── Syllabus assignment save helper ──────────────────────────────────────────
-// Validates and persists a single extracted assignment. Returns true on success.
+// ── Syllabus assignment helpers ──────────────────────────────────────────────
 const VALID_TYPES = ["exam","hw","paper","project","quiz","lab","reading","discussion","presentation","lecture"];
 
-async function saveAssignment(storage: any, courseId: number, userId: string, a: any): Promise<boolean> {
-  const name = String(a.name || "").trim();
-  if (!name || name === "undefined") return false;
+/**
+ * Pre-validate extracted assignments BEFORE clearing existing data.
+ * Returns only the items that have a valid name and parseable date.
+ * This prevents wiping a course's data when the AI returns garbage.
+ */
+function validateExtractedAssignments(raw: any[]): any[] {
+  return raw.filter(a => {
+    if (!a || typeof a !== "object") return false;
+    const name = a.name;
+    if (name === null || name === undefined || typeof name === "object") return false;
+    const nameStr = String(name).trim();
+    if (!nameStr || nameStr === "undefined" || nameStr === "[object Object]") return false;
+    // Guard: null/undefined dueDate produces epoch (1970), not NaN — must check explicitly
+    if (!a.dueDate) return false;
+    const d = new Date(a.dueDate);
+    if (isNaN(d.getTime())) return false;
+    return true;
+  });
+}
 
-  const rawType = String(a.type || "hw").toLowerCase().replace(/[^a-z]/g, "");
+async function saveAssignment(storage: IStorage, courseId: number, userId: string, a: any): Promise<boolean> {
+  // Guard: if 'a' is not an object with string-like fields, skip it
+  if (!a || typeof a !== "object") return false;
+
+  // Extract name — guard against nested objects producing [object Object]
+  const rawName = a.name;
+  if (rawName === null || rawName === undefined || typeof rawName === "object") return false;
+  const name = String(rawName).trim();
+  if (!name || name === "undefined" || name === "[object Object]") return false;
+
+  // Extract type — same guard
+  const rawType = typeof a.type === "string" ? a.type.toLowerCase().replace(/[^a-z]/g, "") : "hw";
   const type = VALID_TYPES.includes(rawType) ? rawType : "hw";
 
-  const weight = Math.min(100, Math.max(0, Number(a.weight) || 0));
-  const maxScore = Math.max(1, Number(a.maxScore) || 100);
+  // Weight and maxScore must be strings for Drizzle decimal columns
+  const weightNum = Math.min(100, Math.max(0, Number(a.weight) || 0));
+  const maxScoreNum = Math.max(1, Number(a.maxScore) || 100);
+  const weight = String(weightNum);
+  const maxScore = String(maxScoreNum);
 
+  // Validate date — null/undefined dueDate produces epoch (1970), not NaN
+  if (!a.dueDate) return false;
   const dueDate = new Date(a.dueDate);
   if (isNaN(dueDate.getTime())) {
     console.warn(`[Syllabus] Invalid date for "${name}": ${a.dueDate}`);
@@ -83,23 +120,35 @@ export async function registerRoutes(
   app.use('/api/syllabi', isAuthenticated);
 
   app.get(api.courses.list.path, async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const courses = await storage.getCourses();
-    
-    const fullCourses = await Promise.all(courses.map(c => storage.getCourseDetails(c.id, userId)));
-    res.json(fullCourses.filter(Boolean));
+    try {
+      const userId = req.user.claims.sub;
+      const courses = await storage.getCourses();
+
+      const fullCourses = await Promise.all(courses.map(c => storage.getCourseDetails(c.id, userId)));
+      res.json(fullCourses.filter(Boolean));
+    } catch (err) {
+      console.error("List courses error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
   app.get(api.courses.get.path, async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const courseId = Number(req.params.id);
-    const course = await storage.getCourseDetails(courseId, userId);
-    
-    if (!course) {
-      return res.status(404).json({ message: "Course not found" });
+    try {
+      const userId = req.user.claims.sub;
+      const courseId = Number(req.params.id);
+      if (isNaN(courseId)) return res.status(400).json({ message: "Invalid course ID" });
+
+      const course = await storage.getCourseDetails(courseId, userId);
+
+      if (!course) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+
+      res.json(course);
+    } catch (err) {
+      console.error("Get course error:", err);
+      res.status(500).json({ message: "Internal server error" });
     }
-    
-    res.json(course);
   });
 
   app.post(api.courses.create.path, async (req: any, res) => {
@@ -123,6 +172,7 @@ export async function registerRoutes(
     try {
       const userId = req.user.claims.sub;
       const courseId = Number(req.params.id);
+      if (isNaN(courseId)) return res.status(400).json({ message: "Invalid course ID" });
 
       const course = await storage.getCourse(courseId);
       if (!course) {
@@ -132,6 +182,7 @@ export async function registerRoutes(
       await storage.joinCourse(courseId, userId);
       res.json({ success: true });
     } catch (err) {
+      console.error("Join course error:", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -141,6 +192,7 @@ export async function registerRoutes(
     try {
       const userId = req.user.claims.sub;
       const courseId = Number(req.params.id);
+      if (isNaN(courseId)) return res.status(400).json({ message: "Invalid course ID" });
       await storage.leaveCourse(courseId, userId);
       res.status(204).send();
     } catch (err) {
@@ -150,14 +202,21 @@ export async function registerRoutes(
   });
 
   app.get(api.assignments.list.path, async (req: any, res) => {
-    const courseId = Number(req.params.courseId);
-    const assignments = await storage.getAssignmentsByCourse(courseId);
-    res.json(assignments);
+    try {
+      const courseId = Number(req.params.courseId);
+      if (isNaN(courseId)) return res.status(400).json({ message: "Invalid course ID" });
+      const assignments = await storage.getAssignmentsByCourse(courseId);
+      res.json(assignments);
+    } catch (err) {
+      console.error("List assignments error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
   app.post(api.assignments.create.path, async (req: any, res) => {
     try {
       const courseId = Number(req.params.courseId);
+      if (isNaN(courseId)) return res.status(400).json({ message: "Invalid course ID" });
       const input = api.assignments.create.input.parse(req.body);
       const assignment = await storage.createAssignment(courseId, input);
       
@@ -395,10 +454,17 @@ export async function registerRoutes(
         }
       }
 
+      // Reject .doc explicitly — mammoth only supports .docx, not legacy .doc format
+      if (ext === ".doc" && fileKind !== "pdf") {
+        return res.status(400).json({
+          message: 'The legacy .doc format is not supported. Please save your file as .docx (Word 2007+) or PDF and upload again.',
+        });
+      }
+
       // Fallback to extension if magic bytes inconclusive
       if (fileKind === "unknown") {
         if (ext === ".pdf") fileKind = "pdf";
-        else if (ext === ".docx" || ext === ".doc") fileKind = "docx";
+        else if (ext === ".docx") fileKind = "docx";
         else if (ext === ".txt" || ext === ".text" || ext === ".md" || ext === ".rtf") fileKind = "txt";
       }
 
@@ -617,8 +683,12 @@ ABSOLUTE RULES:
             try {
               parsed = JSON.parse(geminiResult);
             } catch {
-              const jsonMatch = geminiResult.match(/\{[\s\S]*\}/);
-              if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+              try {
+                const jsonMatch = geminiResult.match(/\{[\s\S]*\}/);
+                if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+              } catch (innerParseErr) {
+                console.error("[Syllabus] Gemini JSON parse failed even with regex fallback:", innerParseErr);
+              }
             }
 
             const extractedAssignments: any[] = parsed.assignments || parsed.items || [];
@@ -630,16 +700,20 @@ ABSOLUTE RULES:
             console.log(`[Syllabus] Gemini extracted ${extractedAssignments.length} assignments`);
 
             if (extractedAssignments.length > 0) {
-              await storage.clearCourseAssignments(courseId);
-              for (const a of extractedAssignments) {
-                try {
-                  const saved = await saveAssignment(storage, courseId, userId, a);
-                  if (saved) createdCount++;
-                } catch (itemErr) {
-                  console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
+              // Validate all assignments before clearing existing data
+              const validated = validateExtractedAssignments(extractedAssignments);
+              if (validated.length > 0) {
+                await storage.clearCourseAssignments(courseId);
+                for (const a of validated) {
+                  try {
+                    const saved = await saveAssignment(storage, courseId, userId, a);
+                    if (saved) createdCount++;
+                  } catch (itemErr) {
+                    console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
+                  }
                 }
               }
-              geminiSucceeded = true;
+              geminiSucceeded = createdCount > 0;
             }
           }
         } catch (geminiErr) {
@@ -656,12 +730,28 @@ ABSOLUTE RULES:
         let text = "";
 
         if (fileKind === "pdf") {
+          let parser: any = null;
           try {
-            const pdfData = await pdfParse(buf);
-            text = pdfData.text || "";
-            console.log(`[Syllabus] pdf-parse: ${text.length} characters`);
-          } catch (pdfErr) {
+            parser = new PDFParse({ data: buf });
+            const result = await parser.getText();
+            text = result.text || "";
+            console.log(`[Syllabus] pdf-parse v2: ${text.length} characters`);
+          } catch (pdfErr: any) {
+            if (pdfErr instanceof PasswordException) {
+              return res.status(422).json({
+                message: "This PDF is password-protected. Please remove the password and upload again, or add assignments manually.",
+              });
+            }
+            if (pdfErr instanceof InvalidPDFException) {
+              return res.status(422).json({
+                message: "This file does not appear to be a valid PDF. Please check the file and try again.",
+              });
+            }
             console.error("[Syllabus] pdf-parse failed:", pdfErr);
+          } finally {
+            if (parser) {
+              try { await parser.destroy(); } catch { /* ignore cleanup errors */ }
+            }
           }
         } else if (fileKind === "docx") {
           try {
@@ -700,13 +790,17 @@ ABSOLUTE RULES:
             temperature: 0.1,
           });
 
-          const rawContent = aiResponse.choices[0].message?.content || "{}";
+          const rawContent = aiResponse.choices?.[0]?.message?.content || "{}";
           let parsed: any = {};
           try {
             parsed = JSON.parse(rawContent);
           } catch {
-            const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+            try {
+              const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+              if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+            } catch (innerParseErr) {
+              console.error("[Syllabus] GPT-4o JSON parse failed even with regex fallback:", innerParseErr);
+            }
           }
 
           const extractedAssignments: any[] = parsed.assignments || parsed.items || [];
@@ -714,13 +808,17 @@ ABSOLUTE RULES:
           console.log(`[Syllabus] GPT-4o extracted ${extractedAssignments.length} assignments`);
 
           if (extractedAssignments.length > 0) {
-            await storage.clearCourseAssignments(courseId);
-            for (const a of extractedAssignments) {
-              try {
-                const saved = await saveAssignment(storage, courseId, userId, a);
-                if (saved) createdCount++;
-              } catch (itemErr) {
-                console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
+            // Validate all before clearing — don't destroy existing data until we know replacements are good
+            const validated = validateExtractedAssignments(extractedAssignments);
+            if (validated.length > 0) {
+              await storage.clearCourseAssignments(courseId);
+              for (const a of validated) {
+                try {
+                  const saved = await saveAssignment(storage, courseId, userId, a);
+                  if (saved) createdCount++;
+                } catch (itemErr) {
+                  console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
+                }
               }
             }
           }
@@ -816,8 +914,14 @@ Respond ONLY with valid JSON matching this exact schema:
         temperature: 0.4,
       });
 
-      const raw = completion.choices[0].message.content || "{}";
-      const parsed = JSON.parse(raw);
+      const raw = completion.choices?.[0]?.message?.content || "{}";
+      let parsed: any;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (parseErr) {
+        console.error("Prep generation: failed to parse AI JSON:", parseErr);
+        return res.status(500).json({ message: "AI returned invalid response. Please try again." });
+      }
       const content = {
         summary: parsed.summary || "",
         topics: parsed.topics || [],
@@ -877,12 +981,13 @@ Provide 6 study resources that would help a student complete this assignment.`;
         temperature: 0.3,
       });
 
-      const raw = completion.choices[0].message.content || "{}";
-      let resources = [];
+      const raw = completion.choices?.[0]?.message?.content || "{}";
+      let resources: any[] = [];
       try {
         const parsed = JSON.parse(raw);
         resources = Array.isArray(parsed) ? parsed : (parsed.resources || parsed.links || []);
-      } catch {
+      } catch (parseErr) {
+        console.error("Resource generation: failed to parse AI JSON:", parseErr);
         resources = [];
       }
 

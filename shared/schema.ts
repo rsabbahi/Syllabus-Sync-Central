@@ -136,13 +136,14 @@ export const insertCourseSchema = createInsertSchema(courses).omit({ id: true, c
 
 export const insertAssignmentSchema = createInsertSchema(assignments).omit({ id: true, createdAt: true }).extend({
   dueDate: z.coerce.date(),
-  weight: z.union([z.string(), z.number()]).transform(v => Number(v)),
-  maxScore: z.union([z.string(), z.number()]).transform(v => Number(v))
+  // Drizzle decimal columns require string values — validate as number, store as string
+  weight: z.union([z.string(), z.number()]).transform(v => String(Number(v))),
+  maxScore: z.union([z.string(), z.number()]).transform(v => String(Number(v)))
 });
 export const updateAssignmentSchema = insertAssignmentSchema.partial();
 
 export const insertUserGradeSchema = createInsertSchema(userGrades).omit({ id: true, userId: true, updatedAt: true }).extend({
-  score: z.union([z.string(), z.number()]).transform(v => Number(v))
+  score: z.union([z.string(), z.number()]).transform(v => String(Number(v)))
 });
 
 export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true, userId: true, createdAt: true }).extend({
@@ -170,13 +171,13 @@ export type InsertCourse = typeof courses.$inferInsert;
 export type CourseStudent = typeof courseStudents.$inferSelect;
 export type Syllabus = typeof syllabi.$inferSelect;
 export type Assignment = typeof assignments.$inferSelect;
-// Use flexible types to accommodate both Drizzle (decimal→string) and Zod (→number) outputs
+// Drizzle decimal() columns require string values — always convert numbers to strings before DB insert/update
 export type InsertAssignment = {
   name: string;
   type: string;
   dueDate: Date;
-  weight: number | string;
-  maxScore: number | string;
+  weight: string;
+  maxScore: string;
   courseId?: number;
 };
 export type UpdateAssignment = Partial<InsertAssignment>;

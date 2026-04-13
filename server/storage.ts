@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, inArray, isNull } from "drizzle-orm";
+import { eq, and, inArray, isNull, desc } from "drizzle-orm";
 import {
   courses,
   courseStudents,
@@ -50,7 +50,7 @@ export interface IStorage {
   // Course
   getCourses(): Promise<Course[]>;
   getCourse(id: number): Promise<Course | undefined>;
-  createCourse(course: InsertCourse, userId: string): Promise<Course>;
+  createCourse(course: Omit<InsertCourse, 'createdBy'>, userId: string): Promise<Course>;
   joinCourse(courseId: number, userId: string): Promise<void>;
   leaveCourse(courseId: number, userId: string): Promise<void>;
   getEnrolledCourses(userId: string): Promise<Course[]>;
@@ -135,7 +135,7 @@ export class DatabaseStorage implements IStorage {
     return course;
   }
 
-  async createCourse(course: InsertCourse, userId: string): Promise<Course> {
+  async createCourse(course: Omit<InsertCourse, 'createdBy'>, userId: string): Promise<Course> {
     const [newCourse] = await db.insert(courses).values({ ...course, createdBy: userId }).returning();
     await this.joinCourse(newCourse.id, userId);
     return newCourse;
@@ -199,7 +199,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSyllabiForCourse(courseId: number): Promise<Syllabus[]> {
-    return await db.select().from(syllabi).where(eq(syllabi.courseId, courseId));
+    return await db.select().from(syllabi)
+      .where(eq(syllabi.courseId, courseId))
+      .orderBy(desc(syllabi.createdAt));
   }
 
   async getAssignmentsByCourse(courseId: number): Promise<Assignment[]> {
@@ -431,7 +433,8 @@ export class DatabaseStorage implements IStorage {
         .from(calendarImportedEvents)
         .where(eq(calendarImportedEvents.userId, userId));
       return rows.map(r => r.externalId);
-    } catch {
+    } catch (err) {
+      console.error("[Storage] getImportedExternalIds failed:", err);
       return [];
     }
   }
@@ -443,7 +446,8 @@ export class DatabaseStorage implements IStorage {
         .where(eq(calendarImportedEvents.userId, userId));
       // Filter out old rows from previous architecture that have no startDate
       return rows.filter(r => r.startDate != null);
-    } catch {
+    } catch (err) {
+      console.error("[Storage] getCalendarImportedEvents failed:", err);
       return [];
     }
   }
@@ -460,7 +464,8 @@ export class DatabaseStorage implements IStorage {
     let existingIds: Set<string>;
     try {
       existingIds = new Set(await this.getImportedExternalIds(userId));
-    } catch {
+    } catch (err) {
+      console.error("[Storage] importCalendarEvents: failed to get existing IDs, proceeding with empty set:", err);
       existingIds = new Set();
     }
 
@@ -498,8 +503,8 @@ export class DatabaseStorage implements IStorage {
     try {
       await db.delete(calendarImportedEvents)
         .where(eq(calendarImportedEvents.connectionId, connectionId));
-    } catch {
-      // table may not exist
+    } catch (err) {
+      console.error("[Storage] deleteImportedEventsByConnection failed:", err);
     }
   }
 
@@ -516,8 +521,8 @@ export class DatabaseStorage implements IStorage {
           isNull(tasks.assignmentId)
         )
       );
-    } catch {
-      // graceful failure
+    } catch (err) {
+      console.error("[Storage] cleanupOldCalendarTasks failed:", err);
     }
   }
 
