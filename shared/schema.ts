@@ -30,6 +30,10 @@ export const courses = pgTable("courses", {
   name: text("name").notNull(),
   section: text("section").notNull(),
   term: text("term").notNull(),
+  instructor: text("instructor"),
+  summary: text("summary"),
+  gradeBreakdown: jsonb("grade_breakdown"),
+  policies: jsonb("policies"),
   createdBy: varchar("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
 });

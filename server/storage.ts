@@ -51,6 +51,7 @@ export interface IStorage {
   getCourses(): Promise<Course[]>;
   getCourse(id: number): Promise<Course | undefined>;
   createCourse(course: Omit<InsertCourse, 'createdBy'>, userId: string): Promise<Course>;
+  updateCourse(id: number, updates: Partial<Pick<Course, 'name' | 'code' | 'section' | 'term' | 'instructor' | 'summary' | 'gradeBreakdown' | 'policies'>>): Promise<Course>;
   joinCourse(courseId: number, userId: string): Promise<void>;
   leaveCourse(courseId: number, userId: string): Promise<void>;
   getEnrolledCourses(userId: string): Promise<Course[]>;
@@ -139,6 +140,11 @@ export class DatabaseStorage implements IStorage {
     const [newCourse] = await db.insert(courses).values({ ...course, createdBy: userId }).returning();
     await this.joinCourse(newCourse.id, userId);
     return newCourse;
+  }
+
+  async updateCourse(id: number, updates: Partial<Pick<Course, 'name' | 'code' | 'section' | 'term' | 'instructor' | 'summary' | 'gradeBreakdown' | 'policies'>>): Promise<Course> {
+    const [updated] = await db.update(courses).set(updates).where(eq(courses.id, id)).returning();
+    return updated;
   }
 
   async joinCourse(courseId: number, userId: string): Promise<void> {

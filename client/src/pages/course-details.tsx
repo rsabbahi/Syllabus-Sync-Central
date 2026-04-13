@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useRoute } from "wouter";
 import { useCourse } from "@/hooks/use-courses";
 import { useAssignments, useCreateAssignment, useDeleteAssignment } from "@/hooks/use-assignments";
-import { useUploadSyllabus, useDeleteSyllabus } from "@/hooks/use-syllabi";
+import { useParseSyllabus, useUploadSyllabus, useDeleteSyllabus } from "@/hooks/use-syllabi";
 import { useLeaveCourse } from "@/hooks/use-courses";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
@@ -46,10 +46,17 @@ export default function CourseDetails() {
             <div className="inline-block bg-primary/10 text-primary px-4 py-1.5 rounded-xl text-sm font-bold font-display mb-4">
               {course.code}
             </div>
-            <h1 className="text-4xl md:text-5xl font-display font-bold text-foreground mb-4">{course.name}</h1>
+            <h1 className="text-4xl md:text-5xl font-display font-bold text-foreground mb-2">{course.name}</h1>
             <p className="text-lg text-muted-foreground font-medium">
-              Section {course.section} • {course.term} • {course.studentCount} Students Enrolled
+              Section {course.section} • {course.term}
+              {course.instructor && <> • Prof. {course.instructor}</>}
+              {" "}• {course.studentCount} Students Enrolled
             </p>
+            {course.summary && (
+              <p className="mt-3 text-sm text-muted-foreground/80 leading-relaxed max-w-3xl">
+                {course.summary}
+              </p>
+            )}
           </div>
           <button
             onClick={() => {
@@ -447,13 +454,13 @@ function AssignmentRow({ assignment, onDelete }: { assignment: any; onDelete: ()
 // ─── SYLLABUS TAB ────────────────────────────────────────────────────────────
 
 function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: number, syllabi: any[], onManualAdd: () => void, onSuccess?: () => void }) {
-  const upload = useUploadSyllabus(courseId);
+  const parse = useParseSyllabus(courseId);
   const deleteSyllabus = useDeleteSyllabus(courseId);
   const [file, setFile] = useState<File | null>(null);
 
   const handleUpload = async () => {
     if (!file) return;
-    upload.mutate(file, {
+    parse.mutate(file, {
       onSuccess: () => {
         setFile(null);
       }
@@ -468,45 +475,52 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
         </div>
         <h3 className="text-2xl font-display font-bold mb-2">Upload Syllabus</h3>
         <p className="text-muted-foreground max-w-lg mx-auto mb-8">
-          Upload a PDF syllabus. Our AI will extract course details, grading weights, and generate a complete timeline of deadlines for everyone in the class.
+          Upload your syllabus PDF. Our AI will extract the course name, instructor, grading weights, meeting times, and every assignment deadline — including weekly recurring ones.
         </p>
-        
+
         <div className="max-w-md mx-auto flex items-center gap-4">
-          <input 
-            type="file" 
+          <input
+            type="file"
             accept="application/pdf,.pdf,.docx,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
             onChange={e => setFile(e.target.files?.[0] || null)}
             className="flex-1 block w-full text-sm text-slate-500 file:mr-4 file:py-3 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-primary/90 file:cursor-pointer file:transition-colors bg-secondary rounded-xl"
           />
-          <Button 
-            onClick={handleUpload} 
-            disabled={!file} 
-            isLoading={upload.isPending}
+          <Button
+            onClick={handleUpload}
+            disabled={!file}
+            isLoading={parse.isPending}
             data-testid="button-extract-ai"
           >
-            Extract AI
+            {parse.isPending ? "Parsing..." : "Parse Syllabus"}
           </Button>
         </div>
+
+        {parse.isPending && (
+          <div className="mt-6 flex items-center justify-center gap-3 text-muted-foreground animate-pulse">
+            <RefreshCw className="w-4 h-4 animate-spin" />
+            <span className="text-sm">Reading PDF and analyzing with AI... this may take 15-30 seconds</span>
+          </div>
+        )}
       </div>
 
-      {upload.isError && (
+      {parse.isError && (
         <div className="bg-destructive/10 border border-destructive/20 p-6 rounded-2xl mb-6 animate-in fade-in">
           <div className="flex items-center gap-3 mb-2">
             <AlertCircle className="w-5 h-5 text-destructive" />
             <h4 className="text-destructive font-bold text-lg">Parsing Failed</h4>
           </div>
-          <p className="text-destructive/80 mb-4">{upload.error?.message || "We couldn't extract assignments from this document."}</p>
+          <p className="text-destructive/80 mb-4">{parse.error?.message || "We couldn't extract assignments from this document."}</p>
           <Button variant="outline" onClick={onManualAdd}>
             Add Manually
           </Button>
         </div>
       )}
 
-      {upload.isSuccess && (
-        <div className="bg-green-50 border border-green-200 p-6 rounded-2xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">
+      {parse.isSuccess && (
+        <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-6 rounded-2xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">
           <div>
-            <h4 className="text-green-800 font-bold text-lg">Syllabus Parsed Successfully!</h4>
-            <p className="text-green-700">Assignments and study tasks have been created from your syllabus.</p>
+            <h4 className="text-green-800 dark:text-green-300 font-bold text-lg">Syllabus Parsed Successfully!</h4>
+            <p className="text-green-700 dark:text-green-400">Course info updated, assignments created, and grade breakdown saved.</p>
           </div>
           <Button variant="primary" onClick={onSuccess} data-testid="button-view-assignments">
             View Assignments
@@ -518,7 +532,7 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
         <div>
           <h3 className="text-xl font-display font-bold mb-4">Uploaded Documents</h3>
           <div className="grid gap-4">
-            {syllabi.map(s => (
+            {syllabi.map((s: any) => (
               <div key={s.id} className="flex items-center p-4 bg-card border border-border rounded-xl">
                 <FileText className="w-8 h-8 text-muted-foreground mr-4" />
                 <div className="flex-1">
@@ -526,7 +540,7 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
                   <p className="text-sm text-muted-foreground">Uploaded on {format(new Date(s.createdAt), "MMM d, yyyy")}</p>
                 </div>
                 {s.parsedContent && (
-                  <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mr-3">
+                  <span className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mr-3">
                     AI Parsed
                   </span>
                 )}

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useGradeTracker, useUpsertGrade } from "@/hooks/use-grades";
 import { LoadingSpinner } from "@/components/loading";
 import { Input } from "@/components/input";
-import { Target, TrendingUp, AlertCircle, ChevronDown } from "lucide-react";
+import { Target, TrendingUp, AlertCircle, ChevronDown, BarChart3 } from "lucide-react";
 import { Button } from "@/components/button";
 
 export default function GradeTracker() {
@@ -20,18 +20,19 @@ export default function GradeTracker() {
       </header>
 
       <div className="grid gap-6">
-        {trackerData?.map(course => {
+        {trackerData?.map((course: any) => {
           const items = course.trackerItems || [];
-          
+          const gradeBreakdown: { category: string; weight: string }[] = course.gradeBreakdown || [];
+
           // Calculate current stats
-          const gradedItems = items.filter(i => i.grade?.score !== null && i.grade?.score !== undefined);
-          const weightAchieved = gradedItems.reduce((sum, i) => {
+          const gradedItems = items.filter((i: any) => i.grade?.score !== null && i.grade?.score !== undefined);
+          const weightAchieved = gradedItems.reduce((sum: number, i: any) => {
             const maxScore = Number(i.assignment.maxScore);
             const weight = Number(i.assignment.weight);
             if (!maxScore || !weight || isNaN(maxScore) || isNaN(weight)) return sum;
             return sum + (Number(i.grade!.score) / maxScore) * weight;
           }, 0);
-          const weightAttempted = gradedItems.reduce((sum, i) => {
+          const weightAttempted = gradedItems.reduce((sum: number, i: any) => {
             const w = Number(i.assignment.weight);
             return sum + (isNaN(w) ? 0 : w);
           }, 0);
@@ -42,7 +43,7 @@ export default function GradeTracker() {
 
           return (
             <div key={course.id} className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden">
-              <div 
+              <div
                 className="p-6 cursor-pointer hover:bg-secondary/30 transition-colors flex items-center justify-between"
                 onClick={() => setExpandedCourse(isExpanded ? null : course.id)}
               >
@@ -65,6 +66,24 @@ export default function GradeTracker() {
 
               {isExpanded && (
                 <div className="p-6 bg-secondary/10 border-t border-border">
+                  {/* Grade Breakdown from Syllabus */}
+                  {gradeBreakdown.length > 0 && (
+                    <div className="mb-6 p-5 bg-card rounded-xl border border-border/50 shadow-sm">
+                      <div className="flex items-center gap-2 mb-4">
+                        <BarChart3 className="w-5 h-5 text-primary" />
+                        <h4 className="font-bold text-lg font-display">Syllabus Grade Breakdown</h4>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                        {gradeBreakdown.map((item: any, idx: number) => (
+                          <div key={idx} className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg">
+                            <span className="text-sm font-medium text-foreground truncate mr-2">{item.category}</span>
+                            <span className="text-sm font-bold text-primary whitespace-nowrap">{item.weight}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {items.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
@@ -77,14 +96,14 @@ export default function GradeTracker() {
                         <div className="col-span-2">Weight</div>
                         <div className="col-span-5 text-right">Score / Max</div>
                       </div>
-                      
-                      {items.map(item => (
+
+                      {items.map((item: any) => (
                         <div key={item.assignment.id} className="grid grid-cols-12 gap-4 items-center p-3 bg-card rounded-xl border border-border/50 shadow-sm">
                           <div className="col-span-5 font-medium">{item.assignment.name}</div>
                           <div className="col-span-2 text-muted-foreground">{item.assignment.weight}%</div>
                           <div className="col-span-5 flex justify-end items-center gap-2">
-                            <Input 
-                              type="number" 
+                            <Input
+                              type="number"
                               className="w-24 h-10 text-right font-bold !py-1 !px-3"
                               placeholder="-"
                               defaultValue={item.grade?.score ?? ""}
@@ -103,7 +122,7 @@ export default function GradeTracker() {
                       ))}
                     </div>
                   )}
-                  
+
                   <div className="mt-8 p-6 bg-primary/5 rounded-xl border border-primary/10">
                     <h4 className="font-bold text-lg mb-2">What-If Calculator</h4>
                     <p className="text-muted-foreground text-sm mb-4">Change the scores above to see how it affects your final grade. The calculations update automatically when you click away from an input.</p>

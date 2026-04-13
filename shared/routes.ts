@@ -236,6 +236,14 @@ export const api = {
         200: z.object({ success: z.boolean(), message: z.string() })
       }
     },
+    parseText: {
+      method: 'POST' as const,
+      path: '/api/courses/:courseId/syllabi/parse-text' as const,
+      input: z.object({ text: z.string().min(50) }),
+      responses: {
+        200: z.object({ success: z.boolean(), message: z.string() })
+      }
+    },
     delete: {
       method: 'DELETE' as const,
       path: '/api/syllabi/:id' as const,

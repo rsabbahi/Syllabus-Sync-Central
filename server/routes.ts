@@ -853,6 +853,230 @@ ABSOLUTE RULES:
     }
   });
 
+  // ── NEW: Client-side PDF.js text → LLM parse route ──────────────────────
+  app.post(api.syllabi.parseText.path, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const courseId = Number(req.params.courseId);
+      if (isNaN(courseId)) return res.status(400).json({ message: "Invalid course ID" });
+
+      // Verify user is enrolled in this course
+      const courseDetails = await storage.getCourseDetails(courseId, userId);
+      if (!courseDetails) return res.status(404).json({ message: "Course not found" });
+      if (!courseDetails.isEnrolled) return res.status(403).json({ message: "You must be enrolled in this course to upload a syllabus" });
+
+      const { text: syllabusText } = api.syllabi.parseText.input.parse(req.body);
+      if (syllabusText.trim().length < 50) {
+        return res.status(422).json({ message: "Not enough text extracted from the PDF. Try a different file." });
+      }
+
+      console.log(`[Syllabus-Parse] Course ${courseId}: received ${syllabusText.length} chars of extracted text`);
+
+      const today = new Date();
+      const currentYear = today.getFullYear();
+
+      const PARSE_PROMPT = `You are a syllabus parser. Analyze the following syllabus text and extract structured information.
+
+TODAY: ${today.toISOString().split("T")[0]}
+ACADEMIC YEAR: ${currentYear}–${currentYear + 1}
+
+Return ONLY a valid JSON object with this exact structure (no markdown, no preamble):
+{
+  "course": {
+    "name": "string — full course name as written on the syllabus",
+    "code": "string or null — course code like CS101",
+    "instructor": "string or null — professor/instructor name",
+    "term": "string or null — e.g. Fall 2026, Spring 2027",
+    "meeting_times": "string or null — e.g. MWF 10:00-10:50am, Room 205"
+  },
+  "summary": "2-3 sentence overview of the course",
+  "deadlines": [
+    { "item": "string", "date": "YYYY-MM-DD", "type": "exam|assignment|project|quiz|other" }
+  ],
+  "assignments": [
+    { "name": "string", "dueDate": "YYYY-MM-DD", "type": "exam|hw|paper|project|quiz|lab|reading|discussion|presentation|lecture", "weight": number_or_null, "maxScore": number_or_null, "recurring": true_or_false }
+  ],
+  "grade_breakdown": [
+    { "category": "string", "weight": "string — e.g. 30%" }
+  ],
+  "important_policies": ["string"]
+}
+
+CRITICAL RULES FOR ASSIGNMENTS:
+1. If the syllabus says something is due weekly (e.g. "homework due every Sunday at 11:59pm"), you MUST create a SEPARATE assignment entry for EVERY SINGLE WEEK from the start of the semester until the final exam date. Set "recurring": true for each.
+   - Example: If semester is Jan 13 - May 2 and HW is due every Sunday, create entries for Jan 19, Jan 26, Feb 2, Feb 9, ... Apr 27. Name them "Homework 1", "Homework 2", etc.
+2. If there is a biweekly pattern, create an entry for every other week.
+3. For one-time assignments, set "recurring": false.
+4. Include ALL deadlines — exams, quizzes, papers, projects, homework, discussions, readings, presentations.
+5. If a weight applies to a category (e.g. "Homework 30%"), divide it evenly across the individual homework assignments.
+6. Use 23:59 for homework/papers unless a specific time is stated.
+7. maxScore defaults to 100 unless stated otherwise.
+8. If information is not available, use null or empty arrays. Do not invent information.
+
+SYLLABUS TEXT:
+${syllabusText.slice(0, 15000)}`;
+
+      // Call LLM
+      let parsed: any = null;
+      let rawLlmResponse = "";
+
+      // Try Gemini first if available
+      if (process.env.Syllabus_API_KEY) {
+        try {
+          for (const model of ["gemini-2.0-flash", "gemini-1.5-pro"]) {
+            try {
+              const geminiRes = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.Syllabus_API_KEY}`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    contents: [{ parts: [{ text: PARSE_PROMPT }] }],
+                    generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+                  }),
+                }
+              );
+              if (geminiRes.ok) {
+                const data = await geminiRes.json();
+                rawLlmResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                if (rawLlmResponse) {
+                  const clean = rawLlmResponse.replace(/```json|```/g, "").trim();
+                  parsed = JSON.parse(clean);
+                  console.log(`[Syllabus-Parse] Gemini ${model} succeeded`);
+                  break;
+                }
+              }
+            } catch (modelErr) {
+              console.warn(`[Syllabus-Parse] Gemini ${model} failed:`, modelErr);
+            }
+          }
+        } catch (geminiErr) {
+          console.error("[Syllabus-Parse] Gemini failed entirely:", geminiErr);
+        }
+      }
+
+      // Fallback to GPT-4o
+      if (!parsed) {
+        try {
+          const aiResponse = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [{ role: "user", content: PARSE_PROMPT }],
+            response_format: { type: "json_object" },
+            temperature: 0.1,
+          });
+          rawLlmResponse = aiResponse.choices?.[0]?.message?.content || "{}";
+          const clean = rawLlmResponse.replace(/```json|```/g, "").trim();
+          parsed = JSON.parse(clean);
+          console.log("[Syllabus-Parse] GPT-4o succeeded");
+        } catch (aiErr: any) {
+          console.error("[Syllabus-Parse] GPT-4o failed:", aiErr);
+          return res.status(500).json({ message: `AI parsing failed: ${aiErr?.message || "Unknown error"}. Try again or add assignments manually.` });
+        }
+      }
+
+      if (!parsed) {
+        return res.status(500).json({ message: "Could not parse syllabus. Try again or add assignments manually." });
+      }
+
+      // ── 1. Update course info ──────────────────────────────────────────────
+      const courseInfo = parsed.course || {};
+      const courseUpdates: any = {};
+      if (courseInfo.name && typeof courseInfo.name === "string") courseUpdates.name = courseInfo.name.trim();
+      if (courseInfo.instructor && typeof courseInfo.instructor === "string") courseUpdates.instructor = courseInfo.instructor.trim();
+      if (courseInfo.term && typeof courseInfo.term === "string") courseUpdates.term = courseInfo.term.trim();
+      if (courseInfo.code && typeof courseInfo.code === "string") courseUpdates.code = courseInfo.code.trim();
+      if (parsed.summary && typeof parsed.summary === "string") courseUpdates.summary = parsed.summary.trim();
+      if (Array.isArray(parsed.grade_breakdown) && parsed.grade_breakdown.length > 0) {
+        courseUpdates.gradeBreakdown = parsed.grade_breakdown;
+      }
+      if (Array.isArray(parsed.important_policies) && parsed.important_policies.length > 0) {
+        courseUpdates.policies = parsed.important_policies;
+      }
+
+      if (Object.keys(courseUpdates).length > 0) {
+        await storage.updateCourse(courseId, courseUpdates);
+        console.log(`[Syllabus-Parse] Updated course ${courseId}:`, Object.keys(courseUpdates));
+      }
+
+      // ── 2. Create meeting time calendar events ─────────────────────────────
+      if (courseInfo.meeting_times && typeof courseInfo.meeting_times === "string") {
+        try {
+          const course = await storage.getCourse(courseId);
+          const meetingStr = courseInfo.meeting_times.trim();
+          // Create a single calendar event for the meeting schedule
+          await storage.createCalendarEvent(userId, {
+            title: `${course?.name || "Class"} — ${meetingStr}`,
+            startDate: new Date(),
+            endDate: null,
+            description: `Meeting times: ${meetingStr}`,
+            location: null,
+            color: "#6366f1",
+            eventType: "class",
+          });
+          console.log(`[Syllabus-Parse] Created meeting time event: ${meetingStr}`);
+        } catch (calErr) {
+          console.warn("[Syllabus-Parse] Failed to create meeting time event:", calErr);
+        }
+      }
+
+      // ── 3. Save assignments ────────────────────────────────────────────────
+      let createdCount = 0;
+      const allAssignments = [
+        ...(parsed.assignments || []),
+        ...(parsed.deadlines || []).map((d: any) => ({
+          name: d.item,
+          dueDate: d.date,
+          type: d.type === "other" ? "hw" : (d.type || "hw"),
+          weight: null,
+          maxScore: 100,
+        })),
+      ];
+
+      // Deduplicate by name+date
+      const seen = new Set<string>();
+      const uniqueAssignments = allAssignments.filter((a: any) => {
+        if (!a?.name || !a?.dueDate) return false;
+        const key = `${String(a.name).trim().toLowerCase()}|${a.dueDate}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      const validated = validateExtractedAssignments(uniqueAssignments);
+      console.log(`[Syllabus-Parse] ${allAssignments.length} raw → ${uniqueAssignments.length} deduped → ${validated.length} validated`);
+
+      if (validated.length > 0) {
+        await storage.clearCourseAssignments(courseId);
+        for (const a of validated) {
+          try {
+            const saved = await saveAssignment(storage, courseId, userId, a);
+            if (saved) createdCount++;
+          } catch (itemErr) {
+            console.error(`[Syllabus-Parse] Failed to save: ${a.name}`, itemErr);
+          }
+        }
+      }
+
+      // ── 4. Save syllabus record ────────────────────────────────────────────
+      await storage.addSyllabus(courseId, userId, "client-extracted", syllabusText.substring(0, 50000), parsed);
+
+      if (createdCount > 0) {
+        res.json({
+          success: true,
+          message: `Extracted ${createdCount} assignment${createdCount !== 1 ? "s" : ""}, updated course info, and saved grade breakdown.`,
+        });
+      } else {
+        res.json({
+          success: true,
+          message: "Syllabus parsed and course info updated, but no assignments with due dates were found. You can add them manually.",
+        });
+      }
+    } catch (err) {
+      console.error("[Syllabus-Parse] Fatal error:", err);
+      res.status(500).json({ message: "Failed to parse syllabus. Please try again." });
+    }
+  });
+
   app.delete(api.syllabi.delete.path, async (req: any, res) => {
     try {
       const id = Number(req.params.id);
