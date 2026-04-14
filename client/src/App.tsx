@@ -47,6 +47,7 @@ import CourseDetails from "@/pages/course-details";
 import GradeTracker from "@/pages/grade-tracker";
 import Profile from "@/pages/profile";
 import Calendar from "@/pages/calendar";
+import TodoPage from "@/pages/todo";
 import Login from "@/pages/login";
 import NotFound from "@/pages/not-found";
 
@@ -100,6 +101,10 @@ function Router() {
 
       <Route path="/calendar">
         <ProtectedRoute component={Calendar} />
+      </Route>
+
+      <Route path="/todo">
+        <ProtectedRoute component={TodoPage} />
       </Route>
 
       <Route path="/profile">

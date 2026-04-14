@@ -55,7 +55,13 @@ export default function Dashboard() {
     )
   ].sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
-  const upcomingEvents = allEvents.filter(e => !('completed' in e) || !e.completed);
+  // Only show next 7 days (plus overdue items)
+  const sevenDaysFromNow = addDays(new Date(), 7);
+  const upcomingEvents = allEvents.filter(e => {
+    if ('completed' in e && e.completed) return false;
+    const eventDate = new Date(e.dueDate);
+    return isBefore(eventDate, sevenDaysFromNow);
+  });
   
   const handleToggleTask = (id: number, currentStatus: boolean | null) => {
     updateTask.mutate({ id, completed: !currentStatus });

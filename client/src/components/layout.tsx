@@ -11,6 +11,7 @@ import {
   X,
   GraduationCap,
   LayoutDashboard,
+  ListTodo,
 } from "lucide-react";
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -22,6 +23,7 @@ export function Layout({ children }: { children: ReactNode }) {
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/courses", label: "Courses", icon: BookOpen },
     { href: "/calendar", label: "Calendar", icon: Calendar },
+    { href: "/todo", label: "To Do", icon: ListTodo },
     { href: "/tracker", label: "Grade Tracker", icon: Target },
   ];
 

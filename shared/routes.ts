@@ -241,7 +241,7 @@ export const api = {
       path: '/api/courses/:courseId/syllabi/parse-text' as const,
       input: z.object({ text: z.string().min(50) }),
       responses: {
-        200: z.object({ success: z.boolean(), message: z.string() })
+        200: z.object({ success: z.boolean(), message: z.string(), parsed: z.any().optional() })
       }
     },
     delete: {

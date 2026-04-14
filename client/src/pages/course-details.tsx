@@ -453,10 +453,23 @@ function AssignmentRow({ assignment, onDelete }: { assignment: any; onDelete: ()
 
 // ─── SYLLABUS TAB ────────────────────────────────────────────────────────────
 
+const DEADLINE_BADGE_COLORS: Record<string, string> = {
+  exam: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
+  quiz: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+  assignment: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+  project: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
+  other: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+};
+
 function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: number, syllabi: any[], onManualAdd: () => void, onSuccess?: () => void }) {
   const parse = useParseSyllabus(courseId);
   const deleteSyllabus = useDeleteSyllabus(courseId);
   const [file, setFile] = useState<File | null>(null);
+
+  // Get the latest parsed content from either the mutation result or the most recent syllabus
+  const parsedFromMutation = parse.data?.parsed;
+  const latestSyllabus = syllabi.length > 0 ? syllabi[0] : null;
+  const parsedContent = parsedFromMutation || latestSyllabus?.parsedContent;
 
   const handleUpload = async () => {
     if (!file) return;
@@ -469,13 +482,14 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
 
   return (
     <div className="space-y-8">
+      {/* Upload Section */}
       <div className="bg-card rounded-2xl p-8 border border-border shadow-sm text-center">
         <div className="w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mx-auto mb-6">
           <Upload className="w-8 h-8" />
         </div>
         <h3 className="text-2xl font-display font-bold mb-2">Upload Syllabus</h3>
         <p className="text-muted-foreground max-w-lg mx-auto mb-8">
-          Upload your syllabus PDF. Our AI will extract the course name, instructor, grading weights, meeting times, and every assignment deadline — including weekly recurring ones.
+          Upload your syllabus PDF. AI will extract the course info, grading weights, deadlines, and assignments.
         </p>
 
         <div className="max-w-md mx-auto flex items-center gap-4">
@@ -503,24 +517,24 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
         )}
       </div>
 
+      {/* Error State */}
       {parse.isError && (
-        <div className="bg-destructive/10 border border-destructive/20 p-6 rounded-2xl mb-6 animate-in fade-in">
+        <div className="bg-destructive/10 border border-destructive/20 p-6 rounded-2xl animate-in fade-in">
           <div className="flex items-center gap-3 mb-2">
             <AlertCircle className="w-5 h-5 text-destructive" />
             <h4 className="text-destructive font-bold text-lg">Parsing Failed</h4>
           </div>
-          <p className="text-destructive/80 mb-4">{parse.error?.message || "We couldn't extract assignments from this document."}</p>
-          <Button variant="outline" onClick={onManualAdd}>
-            Add Manually
-          </Button>
+          <p className="text-destructive/80 mb-4">{parse.error?.message || "We couldn't extract info from this document."}</p>
+          <Button variant="outline" onClick={onManualAdd}>Add Manually</Button>
         </div>
       )}
 
+      {/* Success Banner */}
       {parse.isSuccess && (
         <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-6 rounded-2xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">
           <div>
             <h4 className="text-green-800 dark:text-green-300 font-bold text-lg">Syllabus Parsed Successfully!</h4>
-            <p className="text-green-700 dark:text-green-400">Course info updated, assignments created, and grade breakdown saved.</p>
+            <p className="text-green-700 dark:text-green-400">{parse.data?.message}</p>
           </div>
           <Button variant="primary" onClick={onSuccess} data-testid="button-view-assignments">
             View Assignments
@@ -528,6 +542,125 @@ function SyllabusTab({ courseId, syllabi, onManualAdd, onSuccess }: { courseId: 
         </div>
       )}
 
+      {/* ── Parsed Results Display ── */}
+      {parsedContent && (
+        <div className="space-y-6 animate-in fade-in">
+          {/* Course Info Header */}
+          {parsedContent.course && (
+            <div className="bg-primary/5 rounded-2xl p-6 border border-primary/10">
+              <h3 className="text-2xl font-display font-bold text-foreground">
+                {parsedContent.course.name || "Course"}
+              </h3>
+              <p className="text-muted-foreground mt-1">
+                {parsedContent.course.instructor && <>Prof. {parsedContent.course.instructor}</>}
+                {parsedContent.course.instructor && parsedContent.course.term && " • "}
+                {parsedContent.course.term}
+              </p>
+              {parsedContent.course.meeting_times && (
+                <p className="text-sm text-muted-foreground/80 mt-1">
+                  📅 {parsedContent.course.meeting_times}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Summary */}
+          {parsedContent.summary && (
+            <div className="bg-card rounded-2xl p-6 border border-border shadow-sm">
+              <h4 className="font-display font-bold text-lg mb-2">Course Summary</h4>
+              <p className="text-muted-foreground leading-relaxed">{parsedContent.summary}</p>
+            </div>
+          )}
+
+          {/* Grade Breakdown Table */}
+          {Array.isArray(parsedContent.grade_breakdown) && parsedContent.grade_breakdown.length > 0 && (
+            <div className="bg-card rounded-2xl p-6 border border-border shadow-sm">
+              <h4 className="font-display font-bold text-lg mb-4">Grade Breakdown</h4>
+              <div className="overflow-hidden rounded-xl border border-border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-secondary">
+                      <th className="text-left px-4 py-3 font-bold text-foreground">Category</th>
+                      <th className="text-right px-4 py-3 font-bold text-foreground">Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsedContent.grade_breakdown.map((item: any, idx: number) => (
+                      <tr key={idx} className="border-t border-border hover:bg-secondary/50 transition-colors">
+                        <td className="px-4 py-3 text-foreground">{item.category}</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className="bg-primary/10 text-primary px-2.5 py-1 rounded-lg font-bold text-xs">
+                            {item.weight}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Deadlines */}
+          {Array.isArray(parsedContent.deadlines) && parsedContent.deadlines.length > 0 && (
+            <div className="bg-card rounded-2xl p-6 border border-border shadow-sm">
+              <h4 className="font-display font-bold text-lg mb-4">Deadlines</h4>
+              <div className="space-y-2">
+                {parsedContent.deadlines.map((d: any, idx: number) => (
+                  <div key={idx} className="flex items-center justify-between p-3 rounded-xl hover:bg-secondary/50 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${DEADLINE_BADGE_COLORS[d.type] || DEADLINE_BADGE_COLORS.other}`}>
+                        {d.type}
+                      </span>
+                      <span className="font-medium text-foreground">{d.item}</span>
+                    </div>
+                    <span className="text-sm text-muted-foreground font-medium shrink-0 ml-4">{d.date}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Assignments */}
+          {Array.isArray(parsedContent.assignments) && parsedContent.assignments.length > 0 && (
+            <div className="bg-card rounded-2xl p-6 border border-border shadow-sm">
+              <h4 className="font-display font-bold text-lg mb-4">Assignments</h4>
+              <div className="space-y-2">
+                {parsedContent.assignments.map((a: any, idx: number) => (
+                  <div key={idx} className="flex items-start justify-between p-3 rounded-xl hover:bg-secondary/50 transition-colors">
+                    <div className="flex-1">
+                      <p className="font-medium text-foreground">{a.name}</p>
+                      {a.description && <p className="text-sm text-muted-foreground mt-0.5">{a.description}</p>}
+                    </div>
+                    {a.weight && (
+                      <span className="bg-primary/10 text-primary px-2.5 py-1 rounded-lg font-bold text-xs shrink-0 ml-4">
+                        {a.weight}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Key Policies */}
+          {Array.isArray(parsedContent.important_policies) && parsedContent.important_policies.length > 0 && (
+            <div className="bg-card rounded-2xl p-6 border border-border shadow-sm">
+              <h4 className="font-display font-bold text-lg mb-4">Key Policies</h4>
+              <ul className="space-y-2">
+                {parsedContent.important_policies.map((policy: string, idx: number) => (
+                  <li key={idx} className="flex items-start gap-3 text-sm text-muted-foreground">
+                    <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-primary mt-2" />
+                    {policy}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Uploaded Documents List */}
       {syllabi.length > 0 && (
         <div>
           <h3 className="text-xl font-display font-bold mb-4">Uploaded Documents</h3>
