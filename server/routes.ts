@@ -783,7 +783,6 @@ ABSOLUTE RULES:
         rawTextForStorage = text.substring(0, 50000);
 
         if (text.trim().length < 100) {
-          await storage.addSyllabus(courseId, userId, "local-upload", rawTextForStorage || "no-text", null);
           const hint = fileKind === "pdf"
             ? "This PDF may be a scanned image with no readable text. Try a text-based PDF, or add a Google AI key (Syllabus_API_KEY) in Replit Secrets to enable OCR."
             : `Could not extract enough text from this ${fileKind.toUpperCase()} file.`;
