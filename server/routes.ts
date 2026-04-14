@@ -22,6 +22,7 @@ import { registerAuthRoutes } from "./replit_integrations/auth";
 import { randomBytes } from "crypto";
 import { encryptToken, decryptToken } from "./lib/crypto";
 import { parseIcsBuffer, parseZipBuffer } from "./services/calendar/icsParser";
+import { parseSyllabusText } from "./services/syllabusParser";
 import {
   getGoogleAuthUrl,
   exchangeGoogleCode,
@@ -498,346 +499,81 @@ export async function registerRoutes(
 
       console.log(`[Syllabus] File detected: ${fileKind} (ext=${ext}, mime=${req.file.mimetype}, size=${buf.length})`);
 
-      const today = new Date();
-      const currentYear = today.getFullYear();
-
-      // ── Shared extraction prompt ────────────────────────────────────────────
-
-      const EXTRACTION_PROMPT = `You are an expert academic syllabus parser with 20 years of experience reading every type of university syllabus. Your task: extract EVERY assignment, deadline, exam, quiz, homework, project, lab, reading, and due date from this syllabus — including anything that repeats on a schedule.
-
-TODAY: ${today.toISOString().split("T")[0]}
-ACADEMIC YEAR: ${currentYear}–${currentYear + 1}
-
-═══════════════════════════════════════════════
-PHASE 1 — UNDERSTAND THE DOCUMENT STRUCTURE
-═══════════════════════════════════════════════
-Before extracting, identify:
-1. Semester start and end dates
-2. Days the class meets (e.g. Mon/Wed/Fri, Tues/Thurs)
-3. Any grading breakdown table (e.g. "Homework 30%, Exams 40%")
-4. Total number of each assignment type mentioned
-
-═══════════════════════════════════════════════
-PHASE 2 — EXTRACT ALL ASSIGNMENTS
-═══════════════════════════════════════════════
-
-RECURRING PATTERNS — these must be FULLY EXPANDED:
-
-Pattern → What to generate:
-"HW due every Sunday" → one HW entry for every Sunday in the semester
-"Weekly quiz on Monday" → one quiz for every Monday class
-"Reading before each class" → one reading per class meeting day
-"10 problem sets, due Fridays" → 10 separate entries, one per Friday
-"Lab report every other week" → one entry every 2 weeks
-"Participation grade (weekly)" → one entry per week
-"Discussion post each Wednesday" → one per Wednesday
-"Chapter reading before Tuesday lecture" → one per Tuesday
-"Daily warm-up exercise" → one per class day
-
-Rules for recurring:
-- Count actual occurrences based on the semester length
-- Name them "Homework 1", "Homework 2" ... or "Week 1 Reading", "Week 2 Reading" etc.
-- If the syllabus says "10 homeworks due Sundays", generate exactly 10 entries on consecutive Sundays
-- If it says "weekly" with no specific day, use Sunday as the due date
-
-ONE-OFF ASSIGNMENTS — find every item with a specific date:
-- Exams with dates and times
-- Project deadlines
-- Paper due dates
-- Lab reports on specific dates
-- Presentations
-- Any item in a week-by-week schedule table
-
-TABLE PARSING — for schedule tables:
-- Each row is typically one week
-- Columns may include: Week, Date, Topic, Assignment Due, Points
-- Extract every "Assignment Due" cell as a separate item
-- If a row has multiple assignments, create one entry per assignment
-
-═══════════════════════════════════════════════
-PHASE 3 — ASSIGN WEIGHTS
-═══════════════════════════════════════════════
-- If individual weights are listed: use them
-- If only category weights are listed (e.g. "Homework = 30%"):
-  Count how many homeworks there are, divide: 30% ÷ 10 homeworks = 3% each
-- If no weight info: use 0
-- Weights should be percentages (0-100)
-
-═══════════════════════════════════════════════
-OUTPUT FORMAT
-═══════════════════════════════════════════════
-Return ONLY valid JSON. No explanation. No markdown. No text before or after.
-
-{
-  "semesterStart": "YYYY-MM-DD",
-  "semesterEnd": "YYYY-MM-DD",
-  "assignments": [
-    {
-      "name": "Descriptive assignment name",
-      "type": "hw|exam|paper|project|quiz|lab|reading|discussion|presentation",
-      "dueDate": "YYYY-MM-DDTHH:mm:ssZ",
-      "weight": 3,
-      "maxScore": 100
-    }
-  ]
-}
-
-TYPE GUIDE:
-exam → midterm, final, test, in-class exam
-hw → homework, problem set, assignment, worksheet, exercise
-paper → essay, report, write-up, response paper, reflection
-project → project, final project, group project, capstone
-quiz → quiz, pop quiz, weekly quiz
-lab → lab, laboratory report, lab write-up
-reading → reading, chapter, textbook section
-discussion → discussion post, forum post, response post, Blackboard post
-presentation → presentation, talk, demo, show-and-tell
-
-ABSOLUTE RULES:
-1. EXPAND every recurring pattern — never use "recurring" as a single entry
-2. Use 23:59:59Z for homework/papers. Use actual exam time if stated (e.g. 14:00:00Z)
-3. If only month+day given, use the year that makes sense in the semester
-4. Include EVERYTHING — even small participation assignments
-5. No duplicates (same name + same date)
-6. If a date is unclear, make a reasonable estimate based on semester context
-7. Return ONLY the JSON object`;
-
       let parsedContent: any = null;
       let createdCount = 0;
-      let extractionError = "";
       let rawTextForStorage = "";
 
-      // ── PATH A: Gemini 1.5 Pro — sees the raw PDF directly ─────────────────
-      // For PDFs: Gemini receives the actual bytes so it can see tables, columns,
-      // scanned content, and complex formatting. For DOCX/TXT: we extract text
-      // first and send it as part of the prompt (Gemini doesn't support DOCX natively).
-      let geminiSucceeded = false;
+      // ── Extract text from the uploaded file ───────────────────────────────
+      let text = "";
 
-      if (process.env.Syllabus_API_KEY) {
+      if (fileKind === "pdf") {
+        let parser: any = null;
         try {
-          console.log(`[Syllabus] PATH A: Gemini extraction (fileKind=${fileKind})...`);
-
-          // For non-PDF files, extract text first so Gemini gets clean content
-          let preExtractedText = "";
-          if (fileKind === "docx") {
-            try {
-              const docResult = await mammoth.extractRawText({ buffer: buf });
-              preExtractedText = docResult.value || "";
-              console.log(`[Syllabus] mammoth extracted ${preExtractedText.length} chars from DOCX`);
-            } catch (docErr) {
-              console.warn("[Syllabus] mammoth failed:", docErr);
-            }
-          } else if (fileKind === "txt") {
-            preExtractedText = buf.toString("utf-8");
-            console.log(`[Syllabus] Read ${preExtractedText.length} chars from TXT`);
-          }
-
-          // Build Gemini request parts
-          const geminiParts: any[] = [];
-
-          if (fileKind === "pdf") {
-            // Send raw PDF — Gemini can see tables, layouts, even scanned content
-            geminiParts.push({
-              inline_data: {
-                mime_type: "application/pdf",
-                data: buf.toString("base64"),
-              },
-            });
-            geminiParts.push({ text: EXTRACTION_PROMPT });
-          } else {
-            // For DOCX/TXT: send extracted text with prompt
-            const textForGemini = preExtractedText.substring(0, 60000);
-            geminiParts.push({
-              text: EXTRACTION_PROMPT +
-                `\n\n═══════════════════════════════════════════════\nSYLLABUS TEXT:\n═══════════════════════════════════════════════\n${textForGemini}`,
+          parser = new PDFParse({ data: buf });
+          const result = await parser.getText();
+          text = result.text || "";
+          console.log(`[Syllabus] pdf-parse v2: ${text.length} characters`);
+        } catch (pdfErr: any) {
+          if (pdfErr instanceof PasswordException) {
+            return res.status(422).json({
+              message: "This PDF is password-protected. Please remove the password and upload again, or add assignments manually.",
             });
           }
-
-          const geminiModels = ["gemini-2.0-flash", "gemini-1.5-pro"];
-          let geminiResult: string | null = null;
-
-          for (const model of geminiModels) {
-            try {
-              const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "x-goog-api-key": process.env.Syllabus_API_KEY,
-                },
-                body: JSON.stringify({
-                  contents: [{ parts: geminiParts }],
-                  generationConfig: {
-                    temperature: 0.1,
-                    responseMimeType: "application/json",
-                  },
-                }),
-              });
-
-              const geminiData = await geminiRes.json();
-
-              if (!geminiRes.ok) {
-                console.warn(`[Syllabus] Gemini ${model} returned ${geminiRes.status}:`, geminiData.error?.message);
-                continue;
-              }
-
-              const candidate = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (candidate && candidate.length > 50) {
-                geminiResult = candidate;
-                console.log(`[Syllabus] Gemini ${model} responded (${candidate.length} chars)`);
-                break;
-              }
-            } catch (modelErr) {
-              console.warn(`[Syllabus] Gemini ${model} failed:`, modelErr);
-            }
+          if (pdfErr instanceof InvalidPDFException) {
+            return res.status(422).json({
+              message: "This file does not appear to be a valid PDF. Please check the file and try again.",
+            });
           }
-
-          if (geminiResult) {
-            // Parse Gemini's JSON response
-            let parsed: any = {};
-            try {
-              parsed = JSON.parse(geminiResult);
-            } catch {
-              try {
-                const jsonMatch = geminiResult.match(/\{[\s\S]*\}/);
-                if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-              } catch (innerParseErr) {
-                console.error("[Syllabus] Gemini JSON parse failed even with regex fallback:", innerParseErr);
-              }
-            }
-
-            const extractedAssignments: any[] = parsed.assignments || parsed.items || [];
-            parsedContent = parsed;
-            rawTextForStorage = preExtractedText
-              ? preExtractedText.substring(0, 50000)
-              : `[Extracted via Gemini Vision — ${extractedAssignments.length} assignments found]`;
-
-            console.log(`[Syllabus] Gemini extracted ${extractedAssignments.length} assignments`);
-
-            if (extractedAssignments.length > 0) {
-              // Validate all assignments before clearing existing data
-              const validated = validateExtractedAssignments(extractedAssignments);
-              if (validated.length > 0) {
-                await storage.clearCourseAssignments(courseId);
-                for (const a of validated) {
-                  try {
-                    const saved = await saveAssignment(storage, courseId, userId, a);
-                    if (saved) createdCount++;
-                  } catch (itemErr) {
-                    console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
-                  }
-                }
-              }
-              geminiSucceeded = createdCount > 0;
-            }
+          console.error("[Syllabus] pdf-parse failed:", pdfErr);
+        } finally {
+          if (parser) {
+            try { await parser.destroy(); } catch { /* ignore cleanup errors */ }
           }
-        } catch (geminiErr) {
-          console.error("[Syllabus] Gemini PATH A failed entirely:", geminiErr);
         }
+      } else if (fileKind === "docx") {
+        try {
+          const docResult = await mammoth.extractRawText({ buffer: buf });
+          text = docResult.value || "";
+          console.log(`[Syllabus] mammoth: ${text.length} characters from DOCX`);
+        } catch (docErr) {
+          console.error("[Syllabus] mammoth DOCX extraction failed:", docErr);
+        }
+      } else if (fileKind === "txt") {
+        text = buf.toString("utf-8");
+        console.log(`[Syllabus] Plain text: ${text.length} characters`);
       }
 
-      // ── PATH B: text extraction → GPT-4o ──────────────────────────────────
-      // Used when Gemini key is absent, or Gemini returned 0 assignments.
-      if (!geminiSucceeded) {
-        console.log(`[Syllabus] PATH B: text extraction + GPT-4o (fileKind=${fileKind})...`);
+      rawTextForStorage = text.substring(0, 50000);
 
-        // Extract text based on file type
-        let text = "";
+      if (text.trim().length < 100) {
+        const hint = fileKind === "pdf"
+          ? "This PDF appears to contain no readable text (it may be a scanned image). Try a text-based PDF, or upload a DOCX/TXT file instead."
+          : `Could not extract enough text from this ${fileKind.toUpperCase()} file.`;
+        return res.status(422).json({
+          message: `${hint} You can also add assignments manually using the '+ Add Assignment' button.`,
+        });
+      }
 
-        if (fileKind === "pdf") {
-          let parser: any = null;
-          try {
-            parser = new PDFParse({ data: buf });
-            const result = await parser.getText();
-            text = result.text || "";
-            console.log(`[Syllabus] pdf-parse v2: ${text.length} characters`);
-          } catch (pdfErr: any) {
-            if (pdfErr instanceof PasswordException) {
-              return res.status(422).json({
-                message: "This PDF is password-protected. Please remove the password and upload again, or add assignments manually.",
-              });
-            }
-            if (pdfErr instanceof InvalidPDFException) {
-              return res.status(422).json({
-                message: "This file does not appear to be a valid PDF. Please check the file and try again.",
-              });
-            }
-            console.error("[Syllabus] pdf-parse failed:", pdfErr);
-          } finally {
-            if (parser) {
-              try { await parser.destroy(); } catch { /* ignore cleanup errors */ }
-            }
-          }
-        } else if (fileKind === "docx") {
-          try {
-            const docResult = await mammoth.extractRawText({ buffer: buf });
-            text = docResult.value || "";
-            console.log(`[Syllabus] mammoth: ${text.length} characters from DOCX`);
-          } catch (docErr) {
-            console.error("[Syllabus] mammoth DOCX extraction failed:", docErr);
-          }
-        } else if (fileKind === "txt") {
-          text = buf.toString("utf-8");
-          console.log(`[Syllabus] Plain text: ${text.length} characters`);
-        }
+      // ── Parse locally — no API key required ───────────────────────────────
+      console.log(`[Syllabus] Running local parser on ${text.length} chars...`);
+      const localParsed = parseSyllabusText(text, new Date().getFullYear());
+      parsedContent = localParsed;
 
-        rawTextForStorage = text.substring(0, 50000);
+      const extractedAssignments = localParsed.assignments;
+      console.log(`[Syllabus] Local parser found ${extractedAssignments.length} dated items`);
 
-        if (text.trim().length < 100) {
-          const hint = fileKind === "pdf"
-            ? "This PDF may be a scanned image with no readable text. Try a text-based PDF, or add a Google AI key (Syllabus_API_KEY) in Replit Secrets to enable OCR."
-            : `Could not extract enough text from this ${fileKind.toUpperCase()} file.`;
-          return res.status(422).json({
-            message: `${hint} You can also add assignments manually using the '+ Add Assignment' button.`,
-          });
-        }
-
-        // Inject the extracted text into the prompt for GPT-4o
-        const gptPrompt = EXTRACTION_PROMPT + `\n\n═══════════════════════════════════════════════\nSYLLABUS TEXT:\n═══════════════════════════════════════════════\n${text.substring(0, 60000)}`;
-
-        try {
-          console.log("[Syllabus] Calling GPT-4o...");
-          const aiResponse = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [{ role: "user", content: gptPrompt }],
-            response_format: { type: "json_object" },
-            temperature: 0.1,
-          });
-
-          const rawContent = aiResponse.choices?.[0]?.message?.content || "{}";
-          let parsed: any = {};
-          try {
-            parsed = JSON.parse(rawContent);
-          } catch {
+      if (extractedAssignments.length > 0) {
+        const validated = validateExtractedAssignments(extractedAssignments);
+        if (validated.length > 0) {
+          await storage.clearCourseAssignments(courseId);
+          for (const a of validated) {
             try {
-              const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-              if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-            } catch (innerParseErr) {
-              console.error("[Syllabus] GPT-4o JSON parse failed even with regex fallback:", innerParseErr);
+              const saved = await saveAssignment(storage, courseId, userId, a);
+              if (saved) createdCount++;
+            } catch (itemErr) {
+              console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
             }
           }
-
-          const extractedAssignments: any[] = parsed.assignments || parsed.items || [];
-          parsedContent = parsed;
-          console.log(`[Syllabus] GPT-4o extracted ${extractedAssignments.length} assignments`);
-
-          if (extractedAssignments.length > 0) {
-            // Validate all before clearing — don't destroy existing data until we know replacements are good
-            const validated = validateExtractedAssignments(extractedAssignments);
-            if (validated.length > 0) {
-              await storage.clearCourseAssignments(courseId);
-              for (const a of validated) {
-                try {
-                  const saved = await saveAssignment(storage, courseId, userId, a);
-                  if (saved) createdCount++;
-                } catch (itemErr) {
-                  console.error(`[Syllabus] Failed to save: ${a.name}`, itemErr);
-                }
-              }
-            }
-          }
-        } catch (aiErr: any) {
-          extractionError = aiErr?.message || "Unknown AI error";
-          console.error("[Syllabus] GPT-4o failed:", aiErr);
         }
       }
 
@@ -849,14 +585,10 @@ ABSOLUTE RULES:
           success: true,
           message: `✓ Extracted ${createdCount} assignment${createdCount !== 1 ? "s" : ""} from your syllabus. Check the Assignments tab to review them.`,
         });
-      } else if (extractionError) {
-        res.status(500).json({
-          message: `AI extraction failed: ${extractionError}. Please try uploading again, or add assignments manually.`,
-        });
       } else {
         res.json({
           success: true,
-          message: "Syllabus saved, but no assignments with due dates could be found. Your professor may not have listed specific dates yet — you can add assignments manually.",
+          message: "Syllabus saved, but no assignments with specific due dates could be found automatically. You can add assignments manually using the '+ Add Assignment' button.",
         });
       }
 
@@ -866,7 +598,7 @@ ABSOLUTE RULES:
     }
   });
 
-  // ── Client-side PDF.js text → Gemini LLM parse route (NO OpenAI dependency) ─
+  // ── Client-side PDF.js text → local parse route ──────────────────────────
   app.post(api.syllabi.parseText.path, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -878,87 +610,15 @@ ABSOLUTE RULES:
       if (!courseDetails) return res.status(404).json({ message: "Course not found" });
       if (!courseDetails.isEnrolled) return res.status(403).json({ message: "You must be enrolled in this course to upload a syllabus" });
 
-      // Require Gemini API key — no OpenAI fallback
-      if (!process.env.Syllabus_API_KEY) {
-        return res.status(500).json({
-          message: "Syllabus parsing is not configured. The server needs a Gemini API key (Syllabus_API_KEY). Get a free one at aistudio.google.com."
-        });
-      }
-
       const { text: syllabusText } = api.syllabi.parseText.input.parse(req.body);
       if (syllabusText.trim().length < 50) {
         return res.status(422).json({ message: "Not enough text extracted from the PDF. Try a different file." });
       }
 
-      console.log(`[Syllabus-Parse] Course ${courseId}: received ${syllabusText.length} chars of extracted text`);
+      console.log(`[Syllabus-Parse] Course ${courseId}: received ${syllabusText.length} chars — running local parser`);
 
-      // Use the proven-to-work prompt — simple, reliable extraction
-      const PARSE_PROMPT = `You are a syllabus parser. Analyze the following syllabus text and extract structured information.
-
-Return ONLY a valid JSON object with this exact structure (no markdown, no preamble):
-{
-  "course": {
-    "name": "string",
-    "instructor": "string",
-    "term": "string",
-    "meeting_times": "string"
-  },
-  "summary": "2-3 sentence overview of the course",
-  "deadlines": [
-    { "item": "string", "date": "string", "type": "exam|assignment|project|quiz|other" }
-  ],
-  "assignments": [
-    { "name": "string", "description": "string", "weight": "string or null" }
-  ],
-  "grade_breakdown": [
-    { "category": "string", "weight": "string" }
-  ],
-  "important_policies": ["string"]
-}
-
-If information is not available, use null or empty arrays. Do not invent information.
-
-SYLLABUS TEXT:
-${syllabusText.slice(0, 12000)}`;
-
-      // Call Gemini (try flash first, then pro)
-      let parsed: any = null;
-      let rawLlmResponse = "";
-
-      for (const model of ["gemini-2.0-flash", "gemini-1.5-pro"]) {
-        try {
-          const geminiRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.Syllabus_API_KEY}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: PARSE_PROMPT }] }],
-                generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
-              }),
-            }
-          );
-          if (geminiRes.ok) {
-            const data = await geminiRes.json();
-            rawLlmResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-            if (rawLlmResponse) {
-              const clean = rawLlmResponse.replace(/```json|```/g, "").trim();
-              parsed = JSON.parse(clean);
-              console.log(`[Syllabus-Parse] Gemini ${model} succeeded`);
-              break;
-            }
-          } else {
-            const errBody = await geminiRes.text().catch(() => "");
-            console.warn(`[Syllabus-Parse] Gemini ${model} returned ${geminiRes.status}: ${errBody}`);
-          }
-        } catch (modelErr) {
-          console.warn(`[Syllabus-Parse] Gemini ${model} failed:`, modelErr);
-        }
-      }
-
-      if (!parsed) {
-        return res.status(500).json({ message: "AI parsing failed. Check your Gemini API key or try again." });
-      }
+      // Parse locally — no API key required
+      const parsed = parseSyllabusText(syllabusText, new Date().getFullYear());
 
       // ── 1. Update course info ──────────────────────────────────────────────
       const courseInfo = parsed.course || {};
@@ -1110,7 +770,8 @@ Respond ONLY with valid JSON matching this exact schema:
         ],
         response_format: { type: "json_object" },
         temperature: 0.4,
-      });
+        stream: false,
+      }) as any;
 
       const raw = completion.choices?.[0]?.message?.content || "{}";
       let parsed: any;
@@ -1177,7 +838,8 @@ Provide 6 study resources that would help a student complete this assignment.`;
         ],
         response_format: { type: "json_object" },
         temperature: 0.3,
-      });
+        stream: false,
+      }) as any;
 
       const raw = completion.choices?.[0]?.message?.content || "{}";
       let resources: any[] = [];
