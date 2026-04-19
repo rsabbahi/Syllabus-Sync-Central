@@ -556,7 +556,7 @@ export async function registerRoutes(
 
       // ── Parse locally — no API key required ───────────────────────────────
       console.log(`[Syllabus] Running local parser on ${text.length} chars...`);
-      const localParsed = parseSyllabusText(text, new Date().getFullYear());
+      const localParsed = await parseSyllabusText(text, new Date().getFullYear());
       parsedContent = localParsed;
 
       const extractedAssignments = localParsed.assignments;
@@ -618,7 +618,7 @@ export async function registerRoutes(
       console.log(`[Syllabus-Parse] Course ${courseId}: received ${syllabusText.length} chars — running local parser`);
 
       // Parse locally — no API key required
-      const parsed = parseSyllabusText(syllabusText, new Date().getFullYear());
+      const parsed = await parseSyllabusText(syllabusText, new Date().getFullYear());
 
       // ── 1. Update course info ──────────────────────────────────────────────
       const courseInfo = parsed.course || {};
