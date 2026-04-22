@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # Ollama LLM Server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: syllabus-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # Python FastAPI Backend
+  python-backend:
+    build:
+      context: .
+      dockerfile: python-backend/Dockerfile
+    container_name: syllabus-python-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama3
+      - OLLAMA_TIMEOUT=120
+      - LOG_LEVEL=INFO
+      - PORT=8000
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./python-backend/uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Node.js Backend (optional - for full integration)
+  # Uncomment below if you want to run Node.js services alongside Python backend
+  #
+  # node-backend:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.server
+  #   container_name: syllabus-node-backend
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NODE_ENV=development
+  #   depends_on:
+  #     - python-backend
+  #   restart: unless-stopped
+
+volumes:
+  ollama_data:
+    driver: local
+
+networks:
+  default:
+    name: syllabus-network

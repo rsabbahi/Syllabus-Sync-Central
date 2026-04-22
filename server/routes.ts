@@ -711,6 +711,50 @@ export async function registerRoutes(
     }
   });
 
+  // ── Python LLM-powered syllabus parser (proxy to local service) ──────────────
+  app.post("/api/parse-syllabus", upload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      if (!req.file.originalname?.toLowerCase().endsWith(".pdf")) {
+        return res.status(400).json({ error: "File must be a PDF" });
+      }
+
+      console.log("[Python-Parser] Proxying to LLM backend:", req.file.originalname);
+
+      // Create FormData to send to Python backend
+      const formData = new FormData();
+      const blob = new Blob([req.file.buffer], { type: "application/pdf" });
+      formData.append("file", blob, req.file.originalname);
+
+      // Proxy to Python backend
+      const pythonUrl = process.env.PYTHON_BACKEND_URL || "http://localhost:8000";
+      const response = await fetch(`${pythonUrl}/parse`, {
+        method: "POST",
+        body: formData,
+        timeout: 300000, // 5 minute timeout for LLM processing
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("[Python-Parser] Backend error:", data);
+        return res.status(response.status).json(data);
+      }
+
+      console.log("[Python-Parser] Received", data.todos?.length || 0, "todos from LLM");
+      res.json(data);
+    } catch (err) {
+      console.error("[Python-Parser] Proxy error:", err);
+      res.status(503).json({
+        error: "LLM parsing service unavailable. Ensure Python backend is running.",
+        detail: String(err)
+      });
+    }
+  });
+
   app.delete(api.syllabi.delete.path, async (req: any, res) => {
     try {
       const id = Number(req.params.id);
